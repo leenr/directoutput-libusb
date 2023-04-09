@@ -1,0 +1,18 @@
+[package]
+name = "libfip"
+version = "0.1.0"
+edition = "2021"
+authors = ["Vladimir Solomatin <i@leenr.me>"]
+license = "MIT"
+
+[dependencies]
+arrayref = "0.3"
+libc = "0.2"
+log = "0.4"
+rusb = "0.9"
+widestring = "1.0"
+
+[lib]
+name = "libfip"
+path = "src/libfip.rs"
+crate-type = ["cdylib"]
