@@ -25,17 +25,18 @@ struct UsbHotplugHandler {
 pub fn init() -> Result<State, ()> {
     let displays: Arc<RwLock<BTreeMap<UsbDeviceAddress, Arc<dyn ManagedDisplay>>>> = Arc::new(RwLock::new(BTreeMap::new()));
 
-    let libusb_context: rusb::Context = rusb::Context::new().unwrap();
+    let libusb_context: rusb::Context = rusb::Context::new().expect("Cannot create libusb context");
     let libusb_hotplug_reg = rusb::HotplugBuilder::new()
                 .enumerate(true)
                 .vendor_id(usb_ids::VID_SAITEK)
                 .register(&libusb_context, Box::new(UsbHotplugHandler { displays: displays.clone() }))
-                .unwrap();
+                .expect("Cannot register libusb hotplug handler");
 
     let _libusb_context = libusb_context.clone();
     std::thread::Builder::new()
-        .name("libusb thread".to_owned())
-        .spawn(move || { loop { _libusb_context.handle_events(None).unwrap(); }; }).unwrap();
+            .name("libusb events handling thread".to_owned())
+            .spawn(move || { loop { _libusb_context.handle_events(None).expect("Cannot handle events (libusb)"); }; })
+        .expect("Cannot start libusb events handling thread");
 
     Ok(State {
         libusb_context: libusb_context.clone(),
@@ -46,6 +47,8 @@ pub fn init() -> Result<State, ()> {
 
 impl<T: UsbContext + 'static> rusb::Hotplug<T> for UsbHotplugHandler {
     fn device_arrived(&mut self, device: rusb::Device<T>) {
+        let addr = (device.bus_number(), device.address());
+
         let desc = device.device_descriptor();
         if desc.is_err() {
             log::warn!(
@@ -57,6 +60,7 @@ impl<T: UsbContext + 'static> rusb::Hotplug<T> for UsbHotplugHandler {
         }
 
         let desc = desc.unwrap();
+
         if desc.vendor_id() == usb_ids::VID_SAITEK && desc.product_id() == usb_ids::PID_SAITEK_FIP {
             log::info!(
                 "Saitek FIP device detected via USB ({bus_number}-{address})",
@@ -64,14 +68,26 @@ impl<T: UsbContext + 'static> rusb::Hotplug<T> for UsbHotplugHandler {
                 address = device.address()
             );
 
-            self.displays.write().unwrap()
-                .insert((device.bus_number(), device.address()), crate::devices::saitek_fip_lcd::new_from_libusb(device));
+            let display = crate::devices::saitek_fip_lcd::new_from_libusb(device);
+
+            let mut displays = self.displays.write().expect("State is poisoned");
+            displays.insert(addr, display);
         }
     }
 
-    fn device_left(&mut self, _: rusb::Device<T>) {
-        println!("Device removed");
-        todo!()
+    fn device_left(&mut self, device: rusb::Device<T>) {
+        let addr = (device.bus_number(), device.address());
+        let mut displays = self.displays.write().expect("State is poisoned");
+        match displays.remove(&addr) {
+            Some(_) => {
+                log::info!(
+                    "USB device disconnected ({bus_number}-{address})",
+                    bus_number = device.bus_number(),
+                    address = device.address()
+                );
+            },
+            None => ()
+        }
     }
 }
 
