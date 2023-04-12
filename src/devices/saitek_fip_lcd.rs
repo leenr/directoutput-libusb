@@ -1,6 +1,7 @@
-use std::{sync::{Arc, Weak, RwLock}, time::Duration, mem, cell::OnceCell};
+use std::{sync::{Arc, Weak, Mutex}, time::Duration, mem, cell::OnceCell};
 
 use num_enum::{IntoPrimitive, TryFromPrimitive, TryFromPrimitiveError};
+use uuid::{Uuid, self};
 use zerocopy::{AsBytes, FromBytes, Unaligned};
 
 use crate::devices::ManagedDisplay;
@@ -37,10 +38,11 @@ impl<T: rusb::UsbContext> DeviceHandlerWrapper<T> {
 struct UsbSaitekFipLcdInt<T: rusb::UsbContext> {
     handle: DeviceHandlerWrapper<T>,
     serial_number: String,
+    device_type_uuid: Uuid,
 }
 struct UsbSaitekFipLcd<T: rusb::UsbContext> {
     libusb_device: rusb::Device<T>,
-    int: Arc<RwLock<Option<UsbSaitekFipLcdInt<T>>>>,
+    int: Arc<Mutex<Option<UsbSaitekFipLcdInt<T>>>>,
 }
 
 impl<T: rusb::UsbContext> UsbSaitekFipLcdInt<T> {
@@ -57,12 +59,16 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcdInt<T> {
         }).expect("Cannot find vendor's interface of the device");
         libusb_handle.claim_interface(vendor_interface.number()).expect("Cannot claim vendor's interface of the device");
         
-        let langs = libusb_handle
-            .read_languages(std::time::Duration::from_secs(5))
-            .expect("Could not read languages from the device");
-        let serial_number = libusb_handle
-            .read_serial_number_string(langs[0], &device_descriptor, std::time::Duration::from_secs(1))
-            .expect("Could not read serial number from the device");
+        let serial_number = {
+            let langs = libusb_handle
+                .read_languages(std::time::Duration::from_secs(5))
+                .expect("Could not read languages from the device");
+            libusb_handle
+                .read_serial_number_string(langs[0], &device_descriptor, std::time::Duration::from_secs(1))
+                .expect("Could not read serial number from the device")
+        };
+
+        let device_type_uuid = uuid::uuid!("3E083CD8-6A37-4A58-80A8-3D6A2C07513E");  // seems like that is just a harcoded uuid with no way of retreiving (but I may be wrong)
 
         let read_endpoint_address: OnceCell<u8> = OnceCell::new();
         let write_endpoint_address: OnceCell<u8> = OnceCell::new();
@@ -73,6 +79,8 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcdInt<T> {
             }
         });
 
+        log::info!("Saitek FIP device initialized (serial number: {:?}, type uuid: {:?})", serial_number, device_type_uuid);
+
         UsbSaitekFipLcdInt {
             handle: DeviceHandlerWrapper {
                 libusb_handle,
@@ -80,6 +88,7 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcdInt<T> {
                 write_endpoint_address: *write_endpoint_address.get().expect("Could not find OUT endpoint"),
             },
             serial_number,
+            device_type_uuid
         }
     }
 }
@@ -208,6 +217,10 @@ impl ControlPacket {
         self.request_error = value.into()
     }
 
+    fn has_error(&self) -> bool {
+        self.header_info() > 0 || self.request_info() > 0
+    }
+
     fn new(request: Request) -> ControlPacket {
         ControlPacket {
             server_id: 0.into(),
@@ -225,14 +238,49 @@ impl ControlPacket {
     }
 }
 
-impl<T: rusb::UsbContext> UsbSaitekFipLcd<T> {
-    fn read(&self) -> Result<(ControlPacket, Option<Vec<u8>>), rusb::Error> {
-        let int_guard = self.int.read().expect("Device is poisoned");
-        let int = int_guard.as_ref().expect("Device is gone or not alized yet");
+//#[derive(Debug)]
+//struct ProtocolError {
+//    header_info: u32,
+//    header_error: u32,
+//    request_info: u32,
+//    request_error: u32,
+//}
+//
+//#[derive(Debug)]
+//enum TransmitError {
+//    Rusb(rusb::Error),
+//    Protocol(ProtocolError),
+//}
+//
+//impl fmt::Display for TransmitError {
+//    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+//        match *self {
+//            TransmitError::Rusb(..) => write!(f, "rusb/libusb error"),
+//            TransmitError::Protocol(..) => write!(f, "Error received via protocol"),
+//        }
+//    }
+//}
+//
+//impl error::Error for TransmitError {
+//    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+//        match *self {
+//            TransmitError::Rusb(ref e) => Some(e),
+//            TransmitError::Protocol(..) => None,
+//        }
+//    }
+//}
+//
+//impl From<rusb::Error> for TransmitError {
+//    fn from(err: rusb::Error) -> TransmitError {
+//        TransmitError::Rusb(err)
+//    }
+//}
 
+impl<T: rusb::UsbContext> UsbSaitekFipLcdInt<T> {
+    fn read(&self) -> Result<(ControlPacket, Option<Vec<u8>>), rusb::Error> {
         let control_packet_bytes = {
             let mut buffer: [u8; 44] = unsafe { #[allow(invalid_value)] mem::MaybeUninit::uninit().assume_init() };
-            match int.handle.read_bulk(&mut buffer, Duration::from_secs(5)) {
+            match self.handle.read_bulk(&mut buffer, Duration::from_secs(5)) {
                 Ok(read_size) => if read_size == 44 { Ok(buffer) } else { Err(rusb::Error::Other) },
                 Err(err) => Err(err)
             }
@@ -247,7 +295,7 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcd<T> {
                 panic!("Too big data size");
             }
             let mut vec = Vec::with_capacity(control_packet.data_size());
-            let data = match int.handle.read_bulk(&mut vec, Duration::from_secs(5)) {
+            let data = match self.handle.read_bulk(&mut vec, Duration::from_secs(5)) {
                 Ok(read_size) => if read_size == control_packet.data_size() { Ok(vec) } else { Err(rusb::Error::Other) },
                 Err(err) => Err(err)
             }?;
@@ -256,13 +304,10 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcd<T> {
     }
 
     fn write(&self, control_packet: ControlPacket, data: Option<&[u8]>) -> Result<(), rusb::Error> {
-        let int_guard = self.int.read().expect("Device is poisoned");
-        let int = int_guard.as_ref().expect("Device is gone or not initialized yet");
-
         let mut buffer: [u8; 44] = unsafe { #[allow(invalid_value)] mem::MaybeUninit::uninit().assume_init() };
         ControlPacket::write_to(&control_packet, buffer.as_mut_slice()).expect("Something strange");
         log::debug!("Write control packet to device: {:?}", control_packet);
-        _ = int.handle.write_bulk(&buffer, Duration::from_secs(5))?;
+        _ = self.handle.write_bulk(&buffer, Duration::from_secs(5))?;
 
         if data.unwrap_or(&[]).len() != control_packet.data_size() {
             panic!("Data size is not the same as the data size in the packet");
@@ -270,10 +315,23 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcd<T> {
         if data.is_some() {
             let data = data.unwrap();
             if !data.is_empty() {
-                _ = int.handle.write_bulk(&data, Duration::from_secs(5))?;
+                _ = self.handle.write_bulk(&data, Duration::from_secs(5))?;
             }
         }
         Ok(())
+    }
+
+    fn transmit(&self, control_packet: ControlPacket, data: Option<&[u8]>) -> Result<(ControlPacket, Option<Vec<u8>>), rusb::Error> {
+        self.write(control_packet, data)?;
+        self.read()
+    }
+}
+
+impl<T: rusb::UsbContext> UsbSaitekFipLcd<T> {
+    fn transmit(&self, control_packet: ControlPacket, data: Option<&[u8]>) -> Result<(ControlPacket, Option<Vec<u8>>), rusb::Error> {
+        let int_guard = self.int.lock().expect("Device is poisoned");
+        let int = int_guard.as_ref().expect("Device is gone or not initialized yet");
+        return int.transmit(control_packet, data);
     }
 
     fn _thread_target(device_weak: Weak<UsbSaitekFipLcd<T>>) {
@@ -283,40 +341,18 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcd<T> {
                 None => return,  // device is dropped
             };
             {
-                let device_int_guard = device.int.write();
+                let device_int_guard = device.int.lock();
                 _ = device_int_guard.expect("Device is poisoned").replace(UsbSaitekFipLcdInt::new(&device));
             };
             _ = device.clear_image(0);
         }
-        loop {
-            let device = match device_weak.upgrade() {
-                Some(device) => device,
-                None => return,  // device is dropped
-            };
-            match device.read() {
-                Ok(_) => {
-                    continue;  // TODO?
-                },
-                Err(rusb::Error::Timeout) => {
-                    continue;
-                },
-                Err(rusb::Error::NoDevice) => {
-                    _ = device.int.write().expect("Device is poisoned").take();  // invalidate the device
-                    log::info!("Device is disconnected, invalidating it");
-                }
-                Err(err) => {
-                    _ = device.int.write().expect("Device is poisoned").take();  // invalidate the device
-                    log::error!("Could not read from device ({}), invalidating it", err);
-                },
-            };
-        };
     }
 }
 
 pub fn new_from_libusb<T: rusb::UsbContext + 'static>(libusb_device: rusb::Device<T>) -> Arc<dyn ManagedDisplay> {
     let device = Arc::new(UsbSaitekFipLcd{
         libusb_device: libusb_device.clone(),
-        int: Arc::new(RwLock::new(None))
+        int: Arc::new(Mutex::new(None))
     });
 
     let device_ref = Arc::downgrade(&device);
@@ -330,21 +366,30 @@ pub fn new_from_libusb<T: rusb::UsbContext + 'static>(libusb_device: rusb::Devic
 
 impl<T: rusb::UsbContext> ManagedDisplay for UsbSaitekFipLcd<T> {
     fn ready(&self) -> bool {
-        self.int.read().is_ok_and(|int| { int.is_some() })
+        self.int.lock().is_ok_and(|int| { int.is_some() })
     }
     
     fn serial_number(&self) -> String {
-        let int_guard = self.int.read().expect("Device is poisoned");
+        let int_guard = self.int.lock().expect("Device is poisoned");
         let int = int_guard.as_ref().expect("Device is gone or not initialized yet");
         int.serial_number.clone()
+    }
+
+    fn device_type_uuid(&self) -> Uuid {
+        let int_guard = self.int.lock().expect("Device is poisoned");
+        let int = int_guard.as_ref().expect("Device is gone or not initialized yet");
+        int.device_type_uuid
     }
 
     fn set_image_data(&self, page: u8, data: &[u8; 0x38400]) -> Result<(), ()> {
         let mut packet = ControlPacket::new(Request::SetImage);
         packet.set_page(page);
         packet.set_data_size(data.len());
-        match self.write(packet, Some(data)) {
-            Ok(_) => Ok(()),
+        match self.transmit(packet, Some(data)) {
+            Ok((packet, _)) => match packet.has_error() {
+                false => Ok(()),
+                true => Err(()),  // TODO
+            },
             Err(_) => Err(()),  // TODO
         }
     }
@@ -354,16 +399,23 @@ impl<T: rusb::UsbContext> ManagedDisplay for UsbSaitekFipLcd<T> {
         packet.set_led_page(page);
         packet.set_led_index(index);
         packet.set_led_value(value);
-        match self.write(packet, None) {
-            Ok(_) => Ok(()),
+        match self.transmit(packet, None) {
+            Ok((packet, _)) => match packet.has_error() {
+                false => Ok(()),
+                true => Err(()),  // TODO
+            },
             Err(_) => Err(()),  // TODO
         }
     }
 
     fn clear_image(&self, page: u8) -> Result<(), ()> {
-        let packet = ControlPacket::new(Request::ClearImage);
-        match self.write(packet, None) {
-            Ok(_) => Ok(()),
+        let mut packet = ControlPacket::new(Request::ClearImage);
+        packet.set_page(page);
+        match self.transmit(packet, None) {
+            Ok((packet, _)) => match packet.has_error() {
+                false => Ok(()),
+                true => Err(()),  // TODO
+            },
             Err(_) => Err(()),  // TODO
         }
     }

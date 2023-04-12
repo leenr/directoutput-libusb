@@ -2,11 +2,13 @@ mod saitek_fip_lcd;
 mod usb_ids;
 
 use rusb::UsbContext;
+use uuid::Uuid;
 use std::{collections::BTreeMap, sync::{Arc, Mutex, RwLock}};
 
 pub trait ManagedDisplay: Send + Sync {
     fn ready(&self) -> bool;
     fn serial_number(&self) -> String;
+    fn device_type_uuid(&self) -> Uuid;
     fn set_image_data(&self, page: u8, data: &[u8; 0x38400]) -> Result<(), ()>;
     fn set_led(&self, page: u8, index: u8, value: bool) -> Result<(), ()>;
     fn clear_image(&self, page: u8) -> Result<(), ()>;

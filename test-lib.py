@@ -42,6 +42,9 @@ m.DirectOutput_Initialize('test')
 try:
     x = f.new("int *")
     m.DirectOutput_Enumerate(enumerate_callback, x)
+    if device_addr is None:
+        print('No devices found!')
+        exit(1)
     s = f.new("wchar_t[16]")
     print(m.DirectOutput_GetSerialNumber(device_addr, s, len(s)))
     print(*map(ord, s))

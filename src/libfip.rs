@@ -29,10 +29,10 @@ pub const E_BUFFERTOOSMALL: HRESULT = 0xff04006f;
 pub const E_PAGENOTACTIVE: HRESULT = 0xff040001;
 
 pub struct GUID {
-    pub Data1: libc::c_ulong,
-    pub Data2: libc::c_ushort,
-    pub Data3: libc::c_ushort,
-    pub Data4: [libc::c_uchar; 8],
+    pub data1: u32,
+    pub data2: u16,
+    pub data3: u16,
+    pub data4: [u8; 8],
 }
 
 #[cfg(target_arch = "x86")]
@@ -117,7 +117,27 @@ directoutputlib_export! {
 
 directoutputlib_export! {
     fn DirectOutput_GetDeviceType(device_ptr: DevicePtr, guid: *mut GUID) -> HRESULT {
-        // TODO
+        let state_guard = STATE.lock().expect("State is poisoned");
+        let state: &devices::State = match *state_guard {
+            Some(ref x) => x,
+            None => {
+                log::error!("Library function has been called, but the library is not initialized");
+                return E_HANDLE;
+            }
+        };
+
+        let display = match get_display(state, &device_ptr) {
+            Ok(display) => display,
+            Err(err) => return err,
+        };
+
+        let uuid = display.device_type_uuid();
+        let mut guid = unsafe {&mut *guid };
+
+        let fields = uuid.as_fields();
+        (guid.data1, guid.data2, guid.data3, _) = fields;
+        guid.data4.copy_from_slice(fields.3);
+
         return S_OK;
     }
 }
