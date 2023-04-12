@@ -1,5 +1,8 @@
 use core::slice;
-use std::{sync::{Mutex, Arc}, cmp};
+use std::{
+    cmp,
+    sync::{Arc, Mutex},
+};
 
 extern crate pretty_env_logger;
 
@@ -11,13 +14,17 @@ type DWORD = i32;
 type HRESULT = i64;
 
 #[allow(non_camel_case_types)]
-type Pfn_DirectOutput_EnumerateCallback = unsafe extern "C" fn (device_ptr: DevicePtr, prg_ctx: PrgCtx);
+type Pfn_DirectOutput_EnumerateCallback =
+    unsafe extern "C" fn(device_ptr: DevicePtr, prg_ctx: PrgCtx);
 #[allow(non_camel_case_types)]
-type Pfn_DirectOutput_DeviceChange = unsafe extern "C" fn (device_ptr: DevicePtr, is_added: bool, prg_ctx: PrgCtx);
+type Pfn_DirectOutput_DeviceChange =
+    unsafe extern "C" fn(device_ptr: DevicePtr, is_added: bool, prg_ctx: PrgCtx);
 #[allow(non_camel_case_types)]
-type Pfn_DirectOutput_PageChange = unsafe extern "C" fn (device_ptr: DevicePtr, page: DWORD, is_activated: bool, prg_ctx: PrgCtx);
+type Pfn_DirectOutput_PageChange =
+    unsafe extern "C" fn(device_ptr: DevicePtr, page: DWORD, is_activated: bool, prg_ctx: PrgCtx);
 #[allow(non_camel_case_types)]
-type Pfn_DirectOutput_SoftButtonChange = unsafe extern "C" fn (device_ptr: DevicePtr, buttons_state: DWORD, prg_ctx: PrgCtx);
+type Pfn_DirectOutput_SoftButtonChange =
+    unsafe extern "C" fn(device_ptr: DevicePtr, buttons_state: DWORD, prg_ctx: PrgCtx);
 
 pub const S_OK: HRESULT = 0x00000000;
 pub const E_HANDLE: HRESULT = 0x80070006;
@@ -280,7 +287,6 @@ directoutputlib_export! {
     }
 }
 
-
 fn extract_addr(device_ptr: &DevicePtr) -> Result<devices::UsbDeviceAddress, HRESULT> {
     if *device_ptr as u16 == 0 || *device_ptr as u16 >= u16::MAX {
         return Err(E_HANDLE);
@@ -293,7 +299,10 @@ fn embed_addr(device_addr: devices::UsbDeviceAddress) -> DevicePtr {
     ((device_addr.0 as u16) << 8 | (device_addr.1 as u16)) as DevicePtr
 }
 
-fn get_display(state: &devices::State, device_ptr: &DevicePtr) -> Result<Arc<dyn devices::ManagedDisplay>, HRESULT> {
+fn get_display(
+    state: &devices::State,
+    device_ptr: &DevicePtr,
+) -> Result<Arc<dyn devices::ManagedDisplay>, HRESULT> {
     let addr = extract_addr(&device_ptr);
     if addr.is_err() {
         log::error!("Library function has been called with an invalid device pointer");
