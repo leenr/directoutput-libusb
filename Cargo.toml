@@ -7,11 +7,14 @@ license = "MIT"
 
 [dependencies]
 arrayref = "0.3"
+buffer = "0.1.9"
 libc = "0.2"
 log = "0.4"
+num_enum = "0.6.0"
 pretty_env_logger = "0.4.0"
 rusb = "0.9"
 widestring = "1.0"
+zerocopy = "0.6.1"
 
 [lib]
 name = "libfip"

@@ -1,4 +1,5 @@
-use std::sync::{Mutex, Arc};
+use core::slice;
+use std::{sync::{Mutex, Arc}, cmp};
 
 extern crate pretty_env_logger;
 
@@ -92,7 +93,8 @@ directoutputlib_export! {
         };
 
         state.display_addrs().iter().for_each(move |addr| {
-            unsafe { callback(embed_addr(*addr), prg_ctx); }
+            let device_ptr = embed_addr(*addr);
+            unsafe { callback(device_ptr, prg_ctx); }
         });
 
         return S_OK;
@@ -150,20 +152,6 @@ directoutputlib_export! {
 
 directoutputlib_export! {
     fn DirectOutput_SetLed(device_ptr: DevicePtr, page_number: DWORD, led_index: DWORD, led_value: DWORD) -> HRESULT {
-        // TODO
-        return S_OK;
-    }
-}
-
-directoutputlib_export! {
-    fn DirectOutput_SetString(device_ptr: DevicePtr, page_number: DWORD, string_index: DWORD, string_size: DWORD, string: *const libc::wchar_t) -> HRESULT {
-        // TODO
-        return S_OK;
-    }
-}
-
-directoutputlib_export! {
-    fn DirectOutput_SetImage(device_ptr: DevicePtr, page_number: DWORD, image_index: DWORD, image_size: DWORD, image: *const libc::c_char) -> HRESULT {
         let state_guard = STATE.lock().expect("State is poisoned");
         let state: &devices::State = match *state_guard {
             Some(ref x) => x,
@@ -178,13 +166,60 @@ directoutputlib_export! {
             Err(err) => return err,
         };
 
-        // TODO
-        if image_size != 0x38400 {
+        let page = match page_number.try_into() {
+            Ok(page) => page,
+            Err(_) => return E_INVALIDARG,
+        };
+        let led_index = match led_index.try_into() {
+            Ok(led_index) => led_index,
+            Err(_) => return E_INVALIDARG,
+        };
+        let led_value = match led_value {
+            0 => false,
+            1 => true,
+            _ => return E_INVALIDARG,
+        };
+        let _ = display.set_led(page, led_index, led_value);
+        return S_OK;
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_SetString(device_ptr: DevicePtr, page_number: DWORD, string_index: DWORD, string_size: DWORD, string: *const libc::wchar_t) -> HRESULT {
+        // TODO (seemingly not implemented in FIP)
+        return E_NOTIMPL;
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_SetImage(device_ptr: DevicePtr, page_number: DWORD, image_index: DWORD, image_size: DWORD, image: *const u8) -> HRESULT {
+        let state_guard = STATE.lock().expect("State is poisoned");
+        let state: &devices::State = match *state_guard {
+            Some(ref x) => x,
+            None => {
+                log::error!("Library function has been called, but the library is not initialized");
+                return E_HANDLE;
+            }
+        };
+
+        let display = match get_display(state, &device_ptr) {
+            Ok(display) => display,
+            Err(err) => return err,
+        };
+
+        if image.is_null() {
+            return E_INVALIDARG;
+        }
+        if image_size != 0x38400 {  // TODO
             return E_BUFFERTOOSMALL;
         }
         {
-            let image_data = &unsafe { <*const libc::c_char>::as_ref(image) }.unwrap().to_be_bytes();
-            let _ = display.set_image_data(arrayref::array_ref![image_data, 0, 0x38400]);
+            let image_data = unsafe { slice::from_raw_parts(image, 0x38400) };  //.expect("Null pointer to image data is passed");
+            let page = match page_number.try_into() {
+                Ok(page) => page,
+                Err(_) => return E_INVALIDARG,
+            };
+            let _ = display.set_image_data(page, arrayref::array_ref![image_data, 0, 0x38400]);
         }
         return S_OK;
     }
@@ -214,9 +249,12 @@ directoutputlib_export! {
         };
 
         let serial_number = display.serial_number();
-        unsafe { widestring::WideCString::from_ptr_unchecked(<*mut i32>::cast(res_serial_number), res_serial_number_size).as_mut_slice() }.copy_from_slice(
-            &widestring::WideCString::from_str(serial_number).unwrap().as_slice()[0..res_serial_number_size]
-        );
+        let serial_number_wide = widestring::WideCString::from_str(serial_number).expect("Could not convert serial number to wide c string");
+        if serial_number_wide.len() > res_serial_number_size {
+            return E_BUFFERTOOSMALL;
+        }
+        let res_serial_number_wide = unsafe { widestring::WideCStr::from_ptr_unchecked_mut(<*mut libc::wchar_t>::cast(res_serial_number), serial_number_wide.len()) };
+        unsafe { res_serial_number_wide.as_mut_slice() }.copy_from_slice(&serial_number_wide.as_slice());
 
         return S_OK;
     }

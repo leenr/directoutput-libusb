@@ -1,4 +1,7 @@
-use std::{sync::{Arc, Weak, RwLock}, time::Duration, mem::MaybeUninit, cell::OnceCell};
+use std::{sync::{Arc, Weak, RwLock}, time::Duration, mem, cell::OnceCell};
+
+use num_enum::{IntoPrimitive, TryFromPrimitive, TryFromPrimitiveError};
+use zerocopy::{AsBytes, FromBytes, Unaligned};
 
 use crate::devices::ManagedDisplay;
 
@@ -6,6 +9,13 @@ struct DeviceHandlerWrapper<T: rusb::UsbContext> {
     libusb_handle: rusb::DeviceHandle<T>,
     read_endpoint_address: u8,
     write_endpoint_address: u8,
+}
+
+#[derive(IntoPrimitive, TryFromPrimitive)]
+#[repr(u32)]
+enum Request {
+    SetImage = 0x06,
+    SetLed = 0x18,
 }
 
 impl<T: rusb::UsbContext> DeviceHandlerWrapper<T> {
@@ -70,21 +80,189 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcdInt<T> {
     }
 }
 
+type BEU32 = zerocopy::byteorder::U32<zerocopy::byteorder::BigEndian>;
+
+#[derive(Debug, FromBytes, AsBytes, Unaligned)]
+#[repr(C)]
+struct ControlPacket {
+    server_id: BEU32,
+    page: BEU32,
+    data_size: BEU32,
+    header_info: BEU32,
+    header_error: BEU32,
+    request: BEU32,
+    led_page: BEU32,  // ???
+    led_index: BEU32,  // ?
+    led_value: BEU32,  // ?
+    request_info: BEU32,
+    request_error: BEU32,
+}
+impl ControlPacket {
+    #[inline(always)]
+    fn server_id(&self) -> u32 {
+        self.server_id.get()
+    }
+    #[inline(always)]
+    fn set_server_id(&mut self, value: u32) {
+        self.server_id = value.into()
+    }
+
+    #[inline(always)]
+    fn page(&self) -> u32 {
+        self.page.get()
+    }
+    #[inline(always)]
+    fn set_page(&mut self, value: u32) {
+        self.page = value.into()
+    }
+
+    #[inline(always)]
+    fn data_size(&self) -> usize {
+        self.data_size.get() as usize
+    }
+    #[inline(always)]
+    fn set_data_size(&mut self, value: usize) {
+        self.data_size = (value as u32).into()
+    }
+
+    #[inline(always)]
+    fn header_info(&self) -> u32 {
+        self.header_info.get()
+    }
+    #[inline(always)]
+    fn set_header_info(&mut self, value: u32) {
+        self.header_info = value.into()
+    }
+
+    #[inline(always)]
+    fn header_error(&self) -> u32 {
+        self.header_error.get()
+    }
+    #[inline(always)]
+    fn set_header_error(&mut self, value: u32) {
+        self.header_error = value.into()
+    }
+
+    #[inline(always)]
+    fn request(&self) -> Result<Request, TryFromPrimitiveError<Request>> {
+        Request::try_from(self.request.get())
+    }
+    #[inline(always)]
+    fn set_request(&mut self, value: Request) {
+        self.request = <u32>::into(value.into())
+    }
+
+    #[inline(always)]
+    fn led_page(&self) -> u32 {
+        self.led_page.get()
+    }
+    #[inline(always)]
+    fn set_led_page(&mut self, value: u32) {
+        self.led_page = value.into()
+    }
+
+    #[inline(always)]
+    fn led_index(&self) -> u32 {
+        self.led_index.get()
+    }
+    #[inline(always)]
+    fn set_led_index(&mut self, value: u32) {
+        self.led_index = value.into()
+    }
+
+    #[inline(always)]
+    fn led_value(&self) -> u32 {
+        self.led_value.get()
+    }
+    #[inline(always)]
+    fn set_led_value(&mut self, value: u32) {
+        self.led_value = value.into()
+    }
+
+    #[inline(always)]
+    fn request_info(&self) -> u32 {
+        self.request_info.get()
+    }
+    #[inline(always)]
+    fn set_request_info(&mut self, value: u32) {
+        self.request_info = value.into()
+    }
+
+    #[inline(always)]
+    fn request_error(&self) -> u32 {
+        self.request_error.get()
+    }
+    #[inline(always)]
+    fn set_request_error(&mut self, value: u32) {
+        self.request_error = value.into()
+    }
+
+    fn new(request: Request) -> ControlPacket {
+        ControlPacket {
+            server_id: 0.into(),
+            page: 0.into(),
+            data_size: 0.into(),
+            header_info: 0.into(),
+            header_error: 0.into(),
+            request: <u32>::into(request.into()),
+            led_page: 0.into(),
+            led_index: 0.into(),
+            led_value: 0.into(),
+            request_info: 0.into(),
+            request_error: 0.into(),
+        }
+    }
+}
+
 impl<T: rusb::UsbContext> UsbSaitekFipLcd<T> {
-    fn read(&self) -> Result<[u8; 44], rusb::Error> {
+    fn read(&self) -> Result<(ControlPacket, Option<Vec<u8>>), rusb::Error> {
         let int_guard = self.int.read().expect("Device is poisoned");
         let int = int_guard.as_ref().expect("Device is gone or not initialized yet");
-        let mut read_buffer: [u8; 44] = unsafe { #[allow(invalid_value)] MaybeUninit::uninit().assume_init() };
-        match int.handle.read_bulk(&mut read_buffer, Duration::from_secs(5)) {
-            Ok(size) => if size == 44 { Ok(read_buffer) } else { Err(rusb::Error::Other) },
-            Err(err) => Err(err)
+
+        let control_packet_bytes = {
+            let mut buffer: [u8; 44] = unsafe { #[allow(invalid_value)] mem::MaybeUninit::uninit().assume_init() };
+            match int.handle.read_bulk(&mut buffer, Duration::from_secs(5)) {
+                Ok(read_size) => if read_size == 44 { Ok(buffer) } else { Err(rusb::Error::Other) },
+                Err(err) => Err(err)
+            }
+        }?;
+        let control_packet = ControlPacket::read_from(&control_packet_bytes as &[u8]).expect("Something strange");
+        log::debug!("Read control packet from device: {:?}", control_packet);
+
+        if control_packet.data_size() == 0 {
+            Ok((control_packet, None))
+        } else {
+            if control_packet.data_size() >= 512 * 1024 {
+                panic!("Too big data size");
+            }
+            let mut vec = Vec::with_capacity(control_packet.data_size());
+            let data = match int.handle.read_bulk(&mut vec, Duration::from_secs(5)) {
+                Ok(read_size) => if read_size == control_packet.data_size() { Ok(vec) } else { Err(rusb::Error::Other) },
+                Err(err) => Err(err)
+            }?;
+            Ok((control_packet, Some(data)))
         }
     }
 
-    fn write(&self, data: &[u8]) -> Result<usize, rusb::Error> {
+    fn write(&self, control_packet: ControlPacket, data: Option<&[u8]>) -> Result<(), rusb::Error> {
         let int_guard = self.int.read().expect("Device is poisoned");
         let int = int_guard.as_ref().expect("Device is gone or not initialized yet");
-        int.handle.write_bulk(data, Duration::from_secs(5))
+
+        let mut buffer: [u8; 44] = unsafe { #[allow(invalid_value)] mem::MaybeUninit::uninit().assume_init() };
+        ControlPacket::write_to(&control_packet, buffer.as_mut_slice()).expect("Something strange");
+        log::debug!("Write control packet to device: {:?}", control_packet);
+        _ = int.handle.write_bulk(&buffer, Duration::from_secs(5))?;
+
+        if data.unwrap_or(&[]).len() != control_packet.data_size() {
+            panic!("Data size is not the same as the data size in the packet");
+        }
+        if data.is_some() {
+            let data = data.unwrap();
+            if !data.is_empty() {
+                _ = int.handle.write_bulk(&data, Duration::from_secs(5))?;
+            }
+        }
+        Ok(())
     }
 
     fn _thread_target(device_weak: Weak<UsbSaitekFipLcd<T>>) {
@@ -101,9 +279,8 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcd<T> {
                 None => return,  // device is dropped
             };
             match device.read() {
-                Ok(data) => {
-                    log::debug!("Read data from device: {:?}", data);
-                    continue;
+                Ok(_) => {
+                    continue;  // TODO?
                 },
                 Err(rusb::Error::Timeout) => {
                     continue;
@@ -147,23 +324,24 @@ impl<T: rusb::UsbContext> ManagedDisplay for UsbSaitekFipLcd<T> {
         int.serial_number.clone()
     }
 
-    fn set_image_data(&self, data: &[u8; 0x38400]) -> Result<(), ()> {
-        let res = self.write(&[
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x01,
-            0x00, 0x03, 0x84, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x06,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-        ]);
-        // TODO: error handling
-        let res = self.write(data);
-        // TODO: error handling
-        Ok(())
+    fn set_image_data(&self, page: u8, data: &[u8; 0x38400]) -> Result<(), ()> {
+        let mut packet = ControlPacket::new(Request::SetImage);
+        packet.set_page(page.into());  // TODO
+        packet.set_data_size(data.len());
+        match self.write(packet, Some(data)) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(()),  // TODO
+        }
+    }
+
+    fn set_led(&self, page: u8, index: u8, value: bool) -> Result<(), ()> {
+        let mut packet = ControlPacket::new(Request::SetLed);
+        packet.set_led_page(page.into());  // TODO
+        packet.set_led_index(index.into());  // TODO
+        packet.set_led_value(value.into());  // TODO
+        match self.write(packet, None) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(()),  // TODO
+        }
     }
 }

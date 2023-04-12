@@ -7,7 +7,8 @@ use std::{collections::BTreeMap, sync::{Arc, Mutex, RwLock}};
 pub trait ManagedDisplay: Send + Sync {
     fn ready(&self) -> bool;
     fn serial_number(&self) -> String;
-    fn set_image_data(&self, data: &[u8; 0x38400]) -> Result<(), ()>;
+    fn set_image_data(&self, page: u8, data: &[u8; 0x38400]) -> Result<(), ()>;
+    fn set_led(&self, page: u8, index: u8, value: bool) -> Result<(), ()>;
 }
 
 pub type UsbDeviceAddress = (u8, u8);
