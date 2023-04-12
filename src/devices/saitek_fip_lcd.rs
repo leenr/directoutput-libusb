@@ -136,14 +136,14 @@ struct ControlPacket {
     server_id: BEU32,
     page: BEU32,
     data_size: BEU32,
-    header_info: BEU32,
     header_error: BEU32,
+    header_info: BEU32,
     request: BEU32,
     led_page: BEU32,
     led_index: BEU32,
     led_value: BEU32,
-    request_info: BEU32,
     request_error: BEU32,
+    request_info: BEU32,
 }
 impl ControlPacket {
     #[inline(always)]
@@ -174,21 +174,21 @@ impl ControlPacket {
     }
 
     #[inline(always)]
-    fn header_info(&self) -> u32 {
-        self.header_info.get()
-    }
-    #[inline(always)]
-    fn set_header_info(&mut self, value: u32) {
-        self.header_info = value.into()
-    }
-
-    #[inline(always)]
     fn header_error(&self) -> u32 {
         self.header_error.get()
     }
     #[inline(always)]
     fn set_header_error(&mut self, value: u32) {
         self.header_error = value.into()
+    }
+
+    #[inline(always)]
+    fn header_info(&self) -> u32 {
+        self.header_info.get()
+    }
+    #[inline(always)]
+    fn set_header_info(&mut self, value: u32) {
+        self.header_info = value.into()
     }
 
     #[inline(always)]
@@ -241,15 +241,6 @@ impl ControlPacket {
     }
 
     #[inline(always)]
-    fn request_info(&self) -> u32 {
-        self.request_info.get()
-    }
-    #[inline(always)]
-    fn set_request_info(&mut self, value: u32) {
-        self.request_info = value.into()
-    }
-
-    #[inline(always)]
     fn request_error(&self) -> u32 {
         self.request_error.get()
     }
@@ -258,8 +249,17 @@ impl ControlPacket {
         self.request_error = value.into()
     }
 
+    #[inline(always)]
+    fn request_info(&self) -> u32 {
+        self.request_info.get()
+    }
+    #[inline(always)]
+    fn set_request_info(&mut self, value: u32) {
+        self.request_info = value.into()
+    }
+
     fn has_error(&self) -> bool {
-        self.header_info() > 0 || self.request_info() > 0
+        self.header_error() > 0 || self.request_error() > 0
     }
 
     fn new(request: Request) -> ControlPacket {
@@ -267,24 +267,24 @@ impl ControlPacket {
             server_id: 0.into(),
             page: 0.into(),
             data_size: 0.into(),
-            header_info: 0.into(),
             header_error: 0.into(),
+            header_info: 0.into(),
             request: <u32>::into(request.into()),
             led_page: 0.into(),
             led_index: 0.into(),
             led_value: 0.into(),
-            request_info: 0.into(),
             request_error: 0.into(),
+            request_info: 0.into(),
         }
     }
 }
 
 //#[derive(Debug)]
 //struct ProtocolError {
-//    header_info: u32,
 //    header_error: u32,
-//    request_info: u32,
+//    header_info: u32,
 //    request_error: u32,
+//    request_info: u32,
 //}
 //
 //#[derive(Debug)]
