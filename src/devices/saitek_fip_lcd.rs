@@ -14,7 +14,11 @@ struct DeviceHandlerWrapper<T: rusb::UsbContext> {
 #[derive(IntoPrimitive, TryFromPrimitive)]
 #[repr(u32)]
 enum Request {
+    SaveFile = 0x03,
+    SetImageFile = 0x04,  // + DisplayFile
     SetImage = 0x06,
+    StartServer = 0x09,
+    ClearImage = 0x13,
     SetLed = 0x18,
 }
 
@@ -91,9 +95,9 @@ struct ControlPacket {
     header_info: BEU32,
     header_error: BEU32,
     request: BEU32,
-    led_page: BEU32,  // ???
-    led_index: BEU32,  // ?
-    led_value: BEU32,  // ?
+    led_page: BEU32,
+    led_index: BEU32,
+    led_value: BEU32,
     request_info: BEU32,
     request_error: BEU32,
 }
@@ -108,12 +112,12 @@ impl ControlPacket {
     }
 
     #[inline(always)]
-    fn page(&self) -> u32 {
-        self.page.get()
+    fn page(&self) -> u8 {
+        self.page.get().try_into().expect("Got invalid `page`")
     }
     #[inline(always)]
-    fn set_page(&mut self, value: u32) {
-        self.page = value.into()
+    fn set_page(&mut self, value: u8) {
+        self.page = <u32>::into(value.into())
     }
 
     #[inline(always)]
@@ -153,30 +157,37 @@ impl ControlPacket {
     }
 
     #[inline(always)]
-    fn led_page(&self) -> u32 {
-        self.led_page.get()
+    fn led_page(&self) -> u8 {
+        self.led_page.get().try_into().expect("Got invalid `led_page`")
     }
     #[inline(always)]
-    fn set_led_page(&mut self, value: u32) {
-        self.led_page = value.into()
-    }
-
-    #[inline(always)]
-    fn led_index(&self) -> u32 {
-        self.led_index.get()
-    }
-    #[inline(always)]
-    fn set_led_index(&mut self, value: u32) {
-        self.led_index = value.into()
+    fn set_led_page(&mut self, value: u8) {
+        self.led_page = <u32>::into(value.into())
     }
 
     #[inline(always)]
-    fn led_value(&self) -> u32 {
-        self.led_value.get()
+    fn led_index(&self) -> u8 {
+        self.led_index.get().try_into().expect("Got invalid `led_index`")
     }
     #[inline(always)]
-    fn set_led_value(&mut self, value: u32) {
-        self.led_value = value.into()
+    fn set_led_index(&mut self, value: u8) {
+        self.led_index = <u32>::into(value.into())
+    }
+
+    #[inline(always)]
+    fn led_value(&self) -> bool {
+        match self.led_value.get() {
+            0 => false,
+            1 => true,
+            _ => panic!("Got invalid `led_value`")
+        }
+    }
+    #[inline(always)]
+    fn set_led_value(&mut self, value: bool) {
+        self.led_value = match value {
+            false => 0.into(),
+            true => 1.into(),
+        }
     }
 
     #[inline(always)]
@@ -217,7 +228,7 @@ impl ControlPacket {
 impl<T: rusb::UsbContext> UsbSaitekFipLcd<T> {
     fn read(&self) -> Result<(ControlPacket, Option<Vec<u8>>), rusb::Error> {
         let int_guard = self.int.read().expect("Device is poisoned");
-        let int = int_guard.as_ref().expect("Device is gone or not initialized yet");
+        let int = int_guard.as_ref().expect("Device is gone or not alized yet");
 
         let control_packet_bytes = {
             let mut buffer: [u8; 44] = unsafe { #[allow(invalid_value)] mem::MaybeUninit::uninit().assume_init() };
@@ -271,7 +282,11 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcd<T> {
                 Some(device) => device,
                 None => return,  // device is dropped
             };
-            let _ = device.int.write().expect("Device is poisoned").replace(UsbSaitekFipLcdInt::new(&device));
+            {
+                let device_int_guard = device.int.write();
+                _ = device_int_guard.expect("Device is poisoned").replace(UsbSaitekFipLcdInt::new(&device));
+            };
+            _ = device.clear_image(0);
         }
         loop {
             let device = match device_weak.upgrade() {
@@ -326,7 +341,7 @@ impl<T: rusb::UsbContext> ManagedDisplay for UsbSaitekFipLcd<T> {
 
     fn set_image_data(&self, page: u8, data: &[u8; 0x38400]) -> Result<(), ()> {
         let mut packet = ControlPacket::new(Request::SetImage);
-        packet.set_page(page.into());  // TODO
+        packet.set_page(page);
         packet.set_data_size(data.len());
         match self.write(packet, Some(data)) {
             Ok(_) => Ok(()),
@@ -336,9 +351,17 @@ impl<T: rusb::UsbContext> ManagedDisplay for UsbSaitekFipLcd<T> {
 
     fn set_led(&self, page: u8, index: u8, value: bool) -> Result<(), ()> {
         let mut packet = ControlPacket::new(Request::SetLed);
-        packet.set_led_page(page.into());  // TODO
-        packet.set_led_index(index.into());  // TODO
-        packet.set_led_value(value.into());  // TODO
+        packet.set_led_page(page);
+        packet.set_led_index(index);
+        packet.set_led_value(value);
+        match self.write(packet, None) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(()),  // TODO
+        }
+    }
+
+    fn clear_image(&self, page: u8) -> Result<(), ()> {
+        let packet = ControlPacket::new(Request::ClearImage);
         match self.write(packet, None) {
             Ok(_) => Ok(()),
             Err(_) => Err(()),  // TODO

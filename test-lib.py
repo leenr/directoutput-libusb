@@ -53,7 +53,7 @@ try:
     while True:
         for value in (True, False):
             for i in range(1, 9):
-                print(i, m.DirectOutput_SetLed(device_addr, 0, i, int(value)))
-                time.sleep(0.1)
+                print(i, m.DirectOutput_SetLed(device_addr, 2, i, int(value)))
+                time.sleep(0.075)
 finally:
     m.DirectOutput_Deinitialize()

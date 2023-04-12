@@ -179,7 +179,7 @@ directoutputlib_export! {
             1 => true,
             _ => return E_INVALIDARG,
         };
-        let _ = display.set_led(page, led_index, led_value);
+        _ = display.set_led(page, led_index, led_value);
         return S_OK;
     }
 }
@@ -219,7 +219,7 @@ directoutputlib_export! {
                 Ok(page) => page,
                 Err(_) => return E_INVALIDARG,
             };
-            let _ = display.set_image_data(page, arrayref::array_ref![image_data, 0, 0x38400]);
+            _ = display.set_image_data(page, arrayref::array_ref![image_data, 0, 0x38400]);
         }
         return S_OK;
     }
