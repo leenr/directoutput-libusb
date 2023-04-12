@@ -401,24 +401,21 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcd<T> {
         let int = int_guard
             .as_ref()
             .expect("Device is gone or not initialized yet");
-        return int.transmit(control_packet, data);
+        int.transmit(control_packet, data)
     }
 
     fn _thread_target(device_weak: Weak<UsbSaitekFipLcd<T>>) {
+        let device = match device_weak.upgrade() {
+            Some(device) => device,
+            None => return, // device is dropped
+        };
         {
-            // don't hold reference for long
-            let device = match device_weak.upgrade() {
-                Some(device) => device,
-                None => return, // device is dropped
-            };
-            {
-                let device_int_guard = device.int.lock();
-                _ = device_int_guard
-                    .expect("Device is poisoned")
-                    .replace(UsbSaitekFipLcdInt::new(&device));
-            };
-            _ = device.clear_image(0);
-        }
+            let device_int_guard = device.int.lock();
+            _ = device_int_guard
+                .expect("Device is poisoned")
+                .replace(UsbSaitekFipLcdInt::new(&device));
+        };
+        _ = device.clear_image(0);
     }
 }
 

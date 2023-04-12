@@ -1,8 +1,5 @@
 use core::slice;
-use std::{
-    cmp,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 extern crate pretty_env_logger;
 
@@ -42,6 +39,13 @@ pub struct GUID {
     pub data4: [u8; 8],
 }
 
+pub struct PSRequestStatus {
+    pub dwHeaderError: DWORD,
+    pub dwHeaderInfo: DWORD,
+    pub dwRequestError: DWORD,
+    pub dwRequestInfo: DWORD,
+}
+
 #[cfg(target_arch = "x86")]
 macro_rules! directoutputlib_export {
     ($($toks: tt)+) => {
@@ -68,7 +72,7 @@ directoutputlib_export! {
         if state.is_none() {
             state.replace(devices::init().expect("Cannot perform library initialization"));
         }
-        return S_OK
+        S_OK
     }
 }
 
@@ -78,13 +82,14 @@ directoutputlib_export! {
         if state.is_some() {
             _ = state.take();
         }
-        return S_OK;
+        S_OK
     }
 }
 
 directoutputlib_export! {
     fn DirectOutput_RegisterDeviceCallback(callback: Pfn_DirectOutput_DeviceChange, prg_ctx: PrgCtx) -> HRESULT {
-        return 0  // TODO
+        // TODO
+        S_OK
     }
 }
 
@@ -104,21 +109,21 @@ directoutputlib_export! {
             unsafe { callback(device_ptr, prg_ctx); }
         });
 
-        return S_OK;
+        S_OK
     }
 }
 
 directoutputlib_export! {
     fn DirectOutput_RegisterPageCallback(device_ptr: DevicePtr, callback: Pfn_DirectOutput_PageChange, prg_ctx: PrgCtx) -> HRESULT {
         // TODO
-        return S_OK;
+        S_OK
     }
 }
 
 directoutputlib_export! {
     fn DirectOutput_RegisterSoftButtonCallback(device_ptr: DevicePtr, callback: Pfn_DirectOutput_SoftButtonChange, prg_ctx: PrgCtx) -> HRESULT {
         // TODO
-        return S_OK;
+        S_OK
     }
 }
 
@@ -145,35 +150,35 @@ directoutputlib_export! {
         (guid.data1, guid.data2, guid.data3, _) = fields;
         guid.data4.copy_from_slice(fields.3);
 
-        return S_OK;
+        S_OK
     }
 }
 
 directoutputlib_export! {
     fn DirectOutput_GetDeviceInstance(device_ptr: DevicePtr, guid: *mut GUID) -> HRESULT {
         // TODO
-        return E_NOTIMPL;
+        E_NOTIMPL
     }
 }
 
 directoutputlib_export! {
     fn DirectOutput_SetProfile(device_ptr: DevicePtr, debug_profile_name_size: usize, debug_profile_name: *mut libc::wchar_t) -> HRESULT {
         // TODO
-        return E_NOTIMPL;
+        E_NOTIMPL
     }
 }
 
 directoutputlib_export! {
     fn DirectOutput_AddPage(device_ptr: DevicePtr, page_number: DWORD, page_flags: DWORD) -> HRESULT {
         // TODO
-        return S_OK;
+        S_OK
     }
 }
 
 directoutputlib_export! {
     fn DirectOutput_RemovePage(device_ptr: DevicePtr, page_number: DWORD) -> HRESULT {
         // TODO
-        return S_OK;
+        S_OK
     }
 }
 
@@ -206,15 +211,16 @@ directoutputlib_export! {
             1 => true,
             _ => return E_INVALIDARG,
         };
-        _ = display.set_led(page, led_index, led_value);
-        return S_OK;
+        _ = display.set_led(page, led_index, led_value); // TODO: error handling
+
+        S_OK
     }
 }
 
 directoutputlib_export! {
     fn DirectOutput_SetString(device_ptr: DevicePtr, page_number: DWORD, string_index: DWORD, string_size: DWORD, string: *const libc::wchar_t) -> HRESULT {
-        // TODO (seemingly not implemented in FIP)
-        return E_NOTIMPL;
+        // TODO? (seemingly not implemented in FIP)
+        E_NOTIMPL
     }
 }
 
@@ -248,14 +254,64 @@ directoutputlib_export! {
             };
             _ = display.set_image_data(page, arrayref::array_ref![image_data, 0, 0x38400]);
         }
-        return S_OK;
+
+        S_OK
     }
 }
 
 directoutputlib_export! {
     fn DirectOutput_SetImageFromFile(device_ptr: DevicePtr, page_number: DWORD, image_index: DWORD, filename_size: DWORD, filename: *const libc::wchar_t) -> HRESULT {
         // TODO
-        return S_OK;
+        S_OK
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_StartServer(device_ptr: DevicePtr, filename_size: DWORD, filename: *const libc::wchar_t, server_id: *mut DWORD, status: *mut PSRequestStatus) -> HRESULT {
+        // TODO
+        E_NOTIMPL
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_CloseServer(device_ptr: DevicePtr, server_id: DWORD, status: *mut PSRequestStatus) -> HRESULT {
+        // TODO
+        E_NOTIMPL
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_SendServerMsg(device_ptr: DevicePtr, server_id: DWORD, request: DWORD, page_number: DWORD, data_size: DWORD, data: *const u8, output_size: DWORD, output: *mut u8, status: *mut PSRequestStatus) -> HRESULT {
+        // TODO
+        E_NOTIMPL
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_SendServerFile(device_ptr: DevicePtr, server_id: DWORD, request: DWORD, page_number: DWORD, header_size: DWORD, header: *const u8, filename_size: DWORD, filename: *const libc::wchar_t, output_size: DWORD, output: *mut u8, status: *mut PSRequestStatus) -> HRESULT {
+        // TODO
+        E_NOTIMPL
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_SaveFile(device_ptr: DevicePtr, page_number: DWORD, file_index: DWORD, filename_size: DWORD, filename: *const libc::wchar_t, status: *mut PSRequestStatus) -> HRESULT {
+        // TODO
+        S_OK
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_DisplayFile(device_ptr: DevicePtr, page_number: DWORD, image_index: DWORD, file_index: DWORD, status: *mut PSRequestStatus) -> HRESULT {
+        // TODO
+        S_OK
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_DeleteFile(device_ptr: DevicePtr, page_number: DWORD, file_index: DWORD, status: *mut PSRequestStatus) -> HRESULT {
+        // TODO
+        S_OK
     }
 }
 
@@ -283,7 +339,7 @@ directoutputlib_export! {
         let res_serial_number_wide = unsafe { widestring::WideCStr::from_ptr_unchecked_mut(<*mut libc::wchar_t>::cast(res_serial_number), serial_number_wide.len()) };
         unsafe { res_serial_number_wide.as_mut_slice() }.copy_from_slice(&serial_number_wide.as_slice());
 
-        return S_OK;
+        S_OK
     }
 }
 
@@ -318,5 +374,5 @@ fn get_display(
         log::error!("Library function has been called with a device that has been not yet initialized or has been errored");
         return Err(E_HANDLE);
     }
-    return Ok(display);
+    Ok(display)
 }

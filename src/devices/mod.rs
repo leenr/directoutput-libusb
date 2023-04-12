@@ -23,7 +23,7 @@ pub struct State {
     #[allow(dead_code)] // prevent dropping
     libusb_context: rusb::Context,
     #[allow(dead_code)] // prevent dropping
-	    libusb_hotplug_reg: Mutex<rusb::Registration<rusb::Context>>,
+    libusb_hotplug_reg: Mutex<rusb::Registration<rusb::Context>>,
     displays: Arc<RwLock<BTreeMap<UsbDeviceAddress, Arc<dyn ManagedDisplay>>>>,
 }
 
@@ -116,10 +116,11 @@ impl State {
         displays
             .iter()
             .filter_map(|kv| {
-                if !kv.1.ready() {
-                    return None;
+                if kv.1.ready() {
+                    Some(kv.0.clone())
+                } else {
+                    None
                 }
-                Some(kv.0.clone())
             })
             .collect()
     }
