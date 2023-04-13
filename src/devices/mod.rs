@@ -23,7 +23,7 @@ pub struct State {
     #[allow(dead_code)] // prevent dropping
     libusb_context: rusb::Context,
     #[allow(dead_code)] // prevent dropping
-    libusb_hotplug_reg: Mutex<rusb::Registration<rusb::Context>>,
+    libusb_hotplug_reg: rusb::Registration<rusb::Context>,
     displays: Arc<RwLock<BTreeMap<UsbDeviceAddress, Arc<dyn ManagedDisplay>>>>,
 }
 
@@ -57,11 +57,7 @@ pub fn init() -> Result<State, ()> {
         })
         .expect("Cannot start libusb events handling thread");
 
-    Ok(State {
-        libusb_context: libusb_context.clone(),
-        libusb_hotplug_reg: Mutex::new(libusb_hotplug_reg), // need to save for object not to be dropped
-        displays,
-    })
+    Ok(State {libusb_context, libusb_hotplug_reg, displays})
 }
 
 impl<T: UsbContext + 'static> rusb::Hotplug<T> for UsbHotplugHandler {

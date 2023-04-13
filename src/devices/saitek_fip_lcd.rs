@@ -20,10 +20,13 @@ struct DeviceHandlerWrapper<T: rusb::UsbContext> {
 #[derive(IntoPrimitive, TryFromPrimitive)]
 #[repr(u32)]
 enum Request {
+    FolderRemoved = 0x02, // ??WHAT??
     SaveFile = 0x03,
     SetImageFile = 0x04, // + DisplayFile
     SetImage = 0x06,
+    DeleteFile = 0x07,
     StartServer = 0x09,
+    SomeFactoryModeRequest = 0x0a,  // ? i'm not sure
     ClearImage = 0x13,
     SetLed = 0x18,
 }
@@ -139,9 +142,9 @@ struct ControlPacket {
     header_error: BEU32,
     header_info: BEU32,
     request: BEU32,
-    led_page: BEU32,
-    led_index: BEU32,
-    led_value: BEU32,
+    param_1: BEU32, // led page? / ???????
+    param_2: BEU32, // led index / ???????
+    param_3: BEU32, // led value / file id
     request_error: BEU32,
     request_info: BEU32,
 }
@@ -201,43 +204,30 @@ impl ControlPacket {
     }
 
     #[inline(always)]
-    fn led_page(&self) -> u8 {
-        self.led_page
-            .get()
-            .try_into()
-            .expect("Got invalid `led_page`")
+    fn param_1(&self) -> u32 {
+        self.param_1.get()
     }
     #[inline(always)]
-    fn set_led_page(&mut self, value: u8) {
-        self.led_page = <u32>::into(value.into())
+    fn set_param_1(&mut self, value: u32) {
+        self.param_1 = value.into()
     }
 
     #[inline(always)]
-    fn led_index(&self) -> u8 {
-        self.led_index
-            .get()
-            .try_into()
-            .expect("Got invalid `led_index`")
+    fn param_2(&self) -> u32 {
+        self.param_2.get()
     }
     #[inline(always)]
-    fn set_led_index(&mut self, value: u8) {
-        self.led_index = <u32>::into(value.into())
+    fn set_param_2(&mut self, value: u32) {
+        self.param_2 = value.into()
     }
 
     #[inline(always)]
-    fn led_value(&self) -> bool {
-        match self.led_value.get() {
-            0 => false,
-            1 => true,
-            _ => panic!("Got invalid `led_value`"),
-        }
+    fn param_3(&self) -> u32 {
+        self.param_3.get()
     }
     #[inline(always)]
-    fn set_led_value(&mut self, value: bool) {
-        self.led_value = match value {
-            false => 0.into(),
-            true => 1.into(),
-        }
+    fn set_param_3(&mut self, value: u32) {
+        self.param_3 = value.into()
     }
 
     #[inline(always)]
@@ -270,9 +260,9 @@ impl ControlPacket {
             header_error: 0.into(),
             header_info: 0.into(),
             request: <u32>::into(request.into()),
-            led_page: 0.into(),
-            led_index: 0.into(),
-            led_value: 0.into(),
+            param_1: 0.into(),
+            param_2: 0.into(),
+            param_3: 0.into(),
             request_error: 0.into(),
             request_info: 0.into(),
         }
@@ -409,13 +399,18 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcd<T> {
             Some(device) => device,
             None => return, // device is dropped
         };
-        {
-            let device_int_guard = device.int.lock();
-            _ = device_int_guard
-                .expect("Device is poisoned")
-                .replace(UsbSaitekFipLcdInt::new(&device));
-        };
-        _ = device.clear_image(0);
+
+        let device_int = UsbSaitekFipLcdInt::new(&device);
+
+        let (response, _) = device_int.transmit(ControlPacket::new(Request::SomeFactoryModeRequest), None).expect("Could not transcieve with the device");
+        if !response.has_error() {
+            log::warn!("Device is set to 'Factory Mode', whatever that means - skipping it");
+            return;
+        }
+
+        _ = device.int.lock()
+            .expect("Device is poisoned")
+            .replace(device_int);
     }
 }
 
@@ -476,9 +471,9 @@ impl<T: rusb::UsbContext> ManagedDisplay for UsbSaitekFipLcd<T> {
 
     fn set_led(&self, page: u8, index: u8, value: bool) -> Result<(), ()> {
         let mut packet = ControlPacket::new(Request::SetLed);
-        packet.set_led_page(page);
-        packet.set_led_index(index);
-        packet.set_led_value(value);
+        packet.set_param_1(page.into());
+        packet.set_param_2(index.into());
+        packet.set_param_3(value.into());
         match self.transmit(packet, None) {
             Ok((packet, _)) => match packet.has_error() {
                 false => Ok(()),

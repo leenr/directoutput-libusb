@@ -41,6 +41,7 @@ def enumerate_callback(addr, handle):
 m.DirectOutput_Initialize('test')
 try:
     x = f.new("int *")
+    import time; time.sleep(0.5)
     m.DirectOutput_Enumerate(enumerate_callback, x)
     if device_addr is None:
         print('No devices found!')
