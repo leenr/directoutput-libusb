@@ -1,3 +1,5 @@
+#![feature(let_chains)]
+
 use core::slice;
 use std::sync::{Arc, Mutex};
 
@@ -7,7 +9,10 @@ mod devices;
 
 type PrgCtx = *mut libc::c_void;
 type DevicePtr = u64;
+
+#[allow(clippy::upper_case_acronyms)]
 type DWORD = i32;
+#[allow(clippy::upper_case_acronyms)]
 type HRESULT = i64;
 
 #[allow(non_camel_case_types)]
@@ -39,6 +44,7 @@ pub struct GUID {
     pub data4: [u8; 8],
 }
 
+#[allow(non_snake_case)]
 pub struct PSRequestStatus {
     pub dwHeaderError: DWORD,
     pub dwHeaderInfo: DWORD,
@@ -59,7 +65,7 @@ macro_rules! directoutputlib_export {
     ($($toks: tt)+) => {
         #[no_mangle]
         #[allow(non_snake_case)]
-        pub extern $($toks)+
+        pub unsafe extern $($toks)+
     };
 }
 
@@ -95,13 +101,9 @@ directoutputlib_export! {
 
 directoutputlib_export! {
     fn DirectOutput_Enumerate(callback: Pfn_DirectOutput_EnumerateCallback, prg_ctx: PrgCtx) -> HRESULT {
-        let state_guard = STATE.lock().expect("State is poisoned");
-        let state: &devices::State = match *state_guard {
-            Some(ref x) => x,
-            None => {
-                log::error!("Library function has been called, but the library is not initialized");
-                return E_HANDLE;
-            }
+        let Some(ref state) = *STATE.lock().expect("State is poisoned") else {
+            log::error!("Library function has been called, but the library is not initialized");
+            return E_HANDLE;
         };
 
         state.display_addrs().iter().for_each(move |addr| {
@@ -129,16 +131,12 @@ directoutputlib_export! {
 
 directoutputlib_export! {
     fn DirectOutput_GetDeviceType(device_ptr: DevicePtr, guid: *mut GUID) -> HRESULT {
-        let state_guard = STATE.lock().expect("State is poisoned");
-        let state: &devices::State = match *state_guard {
-            Some(ref x) => x,
-            None => {
-                log::error!("Library function has been called, but the library is not initialized");
-                return E_HANDLE;
-            }
+        let Some(ref state) = *STATE.lock().expect("State is poisoned") else {
+            log::error!("Library function has been called, but the library is not initialized");
+            return E_HANDLE;
         };
 
-        let display = match get_display(state, &device_ptr) {
+        let display = match get_display(state, device_ptr) {
             Ok(display) => display,
             Err(err) => return err,
         };
@@ -184,28 +182,18 @@ directoutputlib_export! {
 
 directoutputlib_export! {
     fn DirectOutput_SetLed(device_ptr: DevicePtr, page_number: DWORD, led_index: DWORD, led_value: DWORD) -> HRESULT {
-        let state_guard = STATE.lock().expect("State is poisoned");
-        let state: &devices::State = match *state_guard {
-            Some(ref x) => x,
-            None => {
-                log::error!("Library function has been called, but the library is not initialized");
-                return E_HANDLE;
-            }
+        let Some(ref state) = *STATE.lock().expect("State is poisoned") else {
+            log::error!("Library function has been called, but the library is not initialized");
+            return E_HANDLE;
         };
 
-        let display = match get_display(state, &device_ptr) {
+        let display = match get_display(state, device_ptr) {
             Ok(display) => display,
             Err(err) => return err,
         };
 
-        let page = match page_number.try_into() {
-            Ok(page) => page,
-            Err(_) => return E_INVALIDARG,
-        };
-        let led_index = match led_index.try_into() {
-            Ok(led_index) => led_index,
-            Err(_) => return E_INVALIDARG,
-        };
+        let Ok(page) = page_number.try_into() else { return E_INVALIDARG; };
+        let Ok(led_index) = led_index.try_into() else { return E_INVALIDARG; };
         let led_value = match led_value {
             0 => false,
             1 => true,
@@ -226,16 +214,12 @@ directoutputlib_export! {
 
 directoutputlib_export! {
     fn DirectOutput_SetImage(device_ptr: DevicePtr, page_number: DWORD, image_index: DWORD, image_size: DWORD, image: *const u8) -> HRESULT {
-        let state_guard = STATE.lock().expect("State is poisoned");
-        let state: &devices::State = match *state_guard {
-            Some(ref x) => x,
-            None => {
-                log::error!("Library function has been called, but the library is not initialized");
-                return E_HANDLE;
-            }
+        let Some(ref state) = *STATE.lock().expect("State is poisoned") else {
+            log::error!("Library function has been called, but the library is not initialized");
+            return E_HANDLE;
         };
 
-        let display = match get_display(state, &device_ptr) {
+        let display = match get_display(state, device_ptr) {
             Ok(display) => display,
             Err(err) => return err,
         };
@@ -247,7 +231,7 @@ directoutputlib_export! {
             return E_BUFFERTOOSMALL;
         }
         {
-            let image_data = unsafe { slice::from_raw_parts(image, 0x38400) };  //.expect("Null pointer to image data is passed");
+            let image_data = unsafe { slice::from_raw_parts(image, 0x38400) };
             let page = match page_number.try_into() {
                 Ok(page) => page,
                 Err(_) => return E_INVALIDARG,
@@ -317,16 +301,12 @@ directoutputlib_export! {
 
 directoutputlib_export! {
     fn DirectOutput_GetSerialNumber(device_ptr: DevicePtr, res_serial_number: *mut libc::wchar_t, res_serial_number_size: usize) -> HRESULT {
-        let state_guard = STATE.lock().expect("State is poisoned");
-        let state: &devices::State = match *state_guard {
-            Some(ref x) => x,
-            None => {
-                log::error!("Library function has been called, but the library is not initialized");
-                return E_HANDLE;
-            }
+        let Some(ref state) = *STATE.lock().expect("State is poisoned") else {
+            log::error!("Library function has been called, but the library is not initialized");
+            return E_HANDLE;
         };
 
-        let display = match get_display(state, &device_ptr) {
+        let display = match get_display(state, device_ptr) {
             Ok(display) => display,
             Err(err) => return err,
         };
@@ -337,17 +317,17 @@ directoutputlib_export! {
             return E_BUFFERTOOSMALL;
         }
         let res_serial_number_wide = unsafe { widestring::WideCStr::from_ptr_unchecked_mut(<*mut libc::wchar_t>::cast(res_serial_number), serial_number_wide.len()) };
-        unsafe { res_serial_number_wide.as_mut_slice() }.copy_from_slice(&serial_number_wide.as_slice());
+        unsafe { res_serial_number_wide.as_mut_slice() }.copy_from_slice(serial_number_wide.as_slice());
 
         S_OK
     }
 }
 
-fn extract_addr(device_ptr: &DevicePtr) -> Result<devices::UsbDeviceAddress, HRESULT> {
-    if *device_ptr as u16 == 0 || *device_ptr as u16 >= u16::MAX {
+fn extract_addr(device_ptr: DevicePtr) -> Result<devices::UsbDeviceAddress, HRESULT> {
+    if device_ptr as u16 == 0 || device_ptr >= u16::MAX.into() {
         return Err(E_HANDLE);
     }
-    let casted: u16 = *device_ptr as u16;
+    let casted: u16 = device_ptr as u16;
     Ok(((casted >> 8) as u8, (casted & 0xff) as u8))
 }
 
@@ -357,19 +337,16 @@ fn embed_addr(device_addr: devices::UsbDeviceAddress) -> DevicePtr {
 
 fn get_display(
     state: &devices::State,
-    device_ptr: &DevicePtr,
+    device_ptr: DevicePtr,
 ) -> Result<Arc<dyn devices::ManagedDisplay>, HRESULT> {
-    let addr = extract_addr(&device_ptr);
-    if addr.is_err() {
+    let Ok(addr) = extract_addr(device_ptr) else {
         log::error!("Library function has been called with an invalid device pointer");
         return Err(E_HANDLE);
-    }
-    let display = state.display_by_addr(&addr.unwrap());
-    if display.is_none() {
+    };
+    let Some(display) = state.display_by_addr(&addr) else {
         log::error!("Library function has been called with a device pointer that doesn't exists");
         return Err(E_HANDLE);
-    }
-    let display = display.unwrap();
+    };
     if !display.ready() {
         log::error!("Library function has been called with a device that has been not yet initialized or has been errored");
         return Err(E_HANDLE);

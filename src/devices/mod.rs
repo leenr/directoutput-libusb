@@ -4,7 +4,7 @@ mod usb_ids;
 use rusb::UsbContext;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
 };
 use uuid::Uuid;
 
@@ -57,24 +57,25 @@ pub fn init() -> Result<State, ()> {
         })
         .expect("Cannot start libusb events handling thread");
 
-    Ok(State {libusb_context, libusb_hotplug_reg, displays})
+    Ok(State {
+        libusb_context,
+        libusb_hotplug_reg,
+        displays,
+    })
 }
 
 impl<T: UsbContext + 'static> rusb::Hotplug<T> for UsbHotplugHandler {
     fn device_arrived(&mut self, device: rusb::Device<T>) {
         let addr = (device.bus_number(), device.address());
 
-        let desc = device.device_descriptor();
-        if desc.is_err() {
+        let Ok(desc) = device.device_descriptor() else {
             log::warn!(
                 "Could not read USB device {bus_number}-{address} descriptor",
                 bus_number = device.bus_number(),
                 address = device.address()
             );
             return;
-        }
-
-        let desc = desc.unwrap();
+        };
 
         if desc.vendor_id() == usb_ids::VID_SAITEK && desc.product_id() == usb_ids::PID_SAITEK_FIP {
             log::info!(
@@ -93,15 +94,12 @@ impl<T: UsbContext + 'static> rusb::Hotplug<T> for UsbHotplugHandler {
     fn device_left(&mut self, device: rusb::Device<T>) {
         let addr = (device.bus_number(), device.address());
         let mut displays = self.displays.write().expect("State is poisoned");
-        match displays.remove(&addr) {
-            Some(_) => {
-                log::info!(
-                    "USB device disconnected ({bus_number}-{address})",
-                    bus_number = device.bus_number(),
-                    address = device.address()
-                );
-            }
-            None => (),
+        if displays.remove(&addr).is_some() {
+            log::info!(
+                "USB device disconnected ({bus_number}-{address})",
+                bus_number = device.bus_number(),
+                address = device.address()
+            );
         }
     }
 }
@@ -113,7 +111,7 @@ impl State {
             .iter()
             .filter_map(|kv| {
                 if kv.1.ready() {
-                    Some(kv.0.clone())
+                    Some(*kv.0)
                 } else {
                     None
                 }
