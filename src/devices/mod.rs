@@ -4,7 +4,7 @@ mod usb_ids;
 use rusb::UsbContext;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock}, io::Read,
 };
 use uuid::Uuid;
 
@@ -15,6 +15,9 @@ pub trait ManagedDisplay: Send + Sync {
     fn set_image_data(&self, page: u8, data: &[u8; 0x38400]) -> Result<(), ()>;
     fn set_led(&self, page: u8, index: u8, value: bool) -> Result<(), ()>;
     fn clear_image(&self, page: u8) -> Result<(), ()>;
+    fn save_file(&self, page: u8, file: u8, data: &mut dyn Read) -> Result<(), ()>;
+    fn display_file(&self, page: u8, index: u8, file: u8) -> Result<(), ()>;
+    fn delete_file(&self, page: u8, file: u8) -> Result<(), ()>;
 }
 
 pub type UsbDeviceAddress = (u8, u8);

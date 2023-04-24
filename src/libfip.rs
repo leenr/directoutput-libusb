@@ -1,7 +1,8 @@
+#![feature(abi_vectorcall)]
 #![feature(let_chains)]
 
 use core::slice;
-use std::sync::{Arc, Mutex};
+use std::{sync::{Arc, Mutex}, io::BufReader, fs, thread::sleep, time::Duration};
 
 extern crate pretty_env_logger;
 
@@ -17,16 +18,16 @@ type HRESULT = i64;
 
 #[allow(non_camel_case_types)]
 type Pfn_DirectOutput_EnumerateCallback =
-    unsafe extern "C" fn(device_ptr: DevicePtr, prg_ctx: PrgCtx);
+    unsafe extern "stdcall" fn(device_ptr: DevicePtr, prg_ctx: PrgCtx);
 #[allow(non_camel_case_types)]
 type Pfn_DirectOutput_DeviceChange =
-    unsafe extern "C" fn(device_ptr: DevicePtr, is_added: bool, prg_ctx: PrgCtx);
+    unsafe extern "stdcall" fn(device_ptr: DevicePtr, is_added: bool, prg_ctx: PrgCtx);
 #[allow(non_camel_case_types)]
 type Pfn_DirectOutput_PageChange =
-    unsafe extern "C" fn(device_ptr: DevicePtr, page: DWORD, is_activated: bool, prg_ctx: PrgCtx);
+    unsafe extern "stdcall" fn(device_ptr: DevicePtr, page: DWORD, is_activated: bool, prg_ctx: PrgCtx);
 #[allow(non_camel_case_types)]
 type Pfn_DirectOutput_SoftButtonChange =
-    unsafe extern "C" fn(device_ptr: DevicePtr, buttons_state: DWORD, prg_ctx: PrgCtx);
+    unsafe extern "stdcall" fn(device_ptr: DevicePtr, buttons_state: DWORD, prg_ctx: PrgCtx);
 
 pub const S_OK: HRESULT = 0x00000000;
 pub const E_HANDLE: HRESULT = 0x80070006;
@@ -37,6 +38,7 @@ pub const E_NOTIMPL: HRESULT = 0x80004001;
 pub const E_BUFFERTOOSMALL: HRESULT = 0xff04006f;
 pub const E_PAGENOTACTIVE: HRESULT = 0xff040001;
 
+#[derive(Debug)]
 pub struct GUID {
     pub data1: u32,
     pub data2: u16,
@@ -45,7 +47,7 @@ pub struct GUID {
 }
 
 #[allow(non_snake_case)]
-pub struct PSRequestStatus {
+pub struct SRequestStatus {
     pub dwHeaderError: DWORD,
     pub dwHeaderInfo: DWORD,
     pub dwRequestError: DWORD,
@@ -57,7 +59,7 @@ macro_rules! directoutputlib_export {
     ($($toks: tt)+) => {
         #[no_mangle]
         #[allow(non_snake_case)]
-        pub extern "stdcall" $($toks)+
+        pub unsafe extern "stdcall" $($toks)+
     };
 }
 #[cfg(target_arch = "x86_64")]
@@ -72,12 +74,14 @@ macro_rules! directoutputlib_export {
 static STATE: Mutex<Option<devices::State>> = Mutex::new(None);
 
 directoutputlib_export! {
-    fn DirectOutput_Initialize(app_name: *const libc::wchar_t) -> HRESULT {
+    fn DirectOutput_Initialize(app_name: libc::uint64_t) -> HRESULT {
         pretty_env_logger::init();
         let mut state = STATE.lock().expect("State is poisoned");
         if state.is_none() {
             state.replace(devices::init().expect("Cannot perform library initialization"));
         }
+        sleep(Duration::from_secs(1));
+        log::info!("App initialized ({:p} {:#})", &0, app_name);
         S_OK
     }
 }
@@ -95,6 +99,7 @@ directoutputlib_export! {
 directoutputlib_export! {
     fn DirectOutput_RegisterDeviceCallback(callback: Pfn_DirectOutput_DeviceChange, prg_ctx: PrgCtx) -> HRESULT {
         // TODO
+        log::info!("RegisterDeviceCallback {:p}(..., {:p})", callback, prg_ctx);
         S_OK
     }
 }
@@ -108,7 +113,9 @@ directoutputlib_export! {
 
         state.display_addrs().iter().for_each(move |addr| {
             let device_ptr = embed_addr(*addr);
+            log::info!("Calling {:p}({:#}, {:p})", callback, device_ptr, prg_ctx);
             unsafe { callback(device_ptr, prg_ctx); }
+            log::info!("Called {:p}({:#}, {:p})", callback, device_ptr, prg_ctx);
         });
 
         S_OK
@@ -147,6 +154,7 @@ directoutputlib_export! {
         let fields = uuid.as_fields();
         (guid.data1, guid.data2, guid.data3, _) = fields;
         guid.data4.copy_from_slice(fields.3);
+        log::error!("{:?}", guid);
 
         S_OK
     }
@@ -161,13 +169,13 @@ directoutputlib_export! {
 
 directoutputlib_export! {
     fn DirectOutput_SetProfile(device_ptr: DevicePtr, debug_profile_name_size: usize, debug_profile_name: *mut libc::wchar_t) -> HRESULT {
-        // TODO
+        // TODO (talks to the driver)
         E_NOTIMPL
     }
 }
 
 directoutputlib_export! {
-    fn DirectOutput_AddPage(device_ptr: DevicePtr, page_number: DWORD, page_flags: DWORD) -> HRESULT {
+    fn DirectOutput_AddPage(device_ptr: DevicePtr, page_number: DWORD, debug_name: *const libc::wchar_t, page_flags: DWORD) -> HRESULT {
         // TODO
         S_OK
     }
@@ -199,7 +207,8 @@ directoutputlib_export! {
             1 => true,
             _ => return E_INVALIDARG,
         };
-        _ = display.set_led(page, led_index, led_value); // TODO: error handling
+        _ = display.set_led(page, led_index, led_value);
+        // TODO: error handling
 
         S_OK
     }
@@ -232,11 +241,9 @@ directoutputlib_export! {
         }
         {
             let image_data = unsafe { slice::from_raw_parts(image, 0x38400) };
-            let page = match page_number.try_into() {
-                Ok(page) => page,
-                Err(_) => return E_INVALIDARG,
-            };
+            let Ok(page) = page_number.try_into() else { return E_INVALIDARG };
             _ = display.set_image_data(page, arrayref::array_ref![image_data, 0, 0x38400]);
+            // TODO: error handling
         }
 
         S_OK
@@ -246,55 +253,108 @@ directoutputlib_export! {
 directoutputlib_export! {
     fn DirectOutput_SetImageFromFile(device_ptr: DevicePtr, page_number: DWORD, image_index: DWORD, filename_size: DWORD, filename: *const libc::wchar_t) -> HRESULT {
         // TODO
+        todo!()
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_StartServer(device_ptr: DevicePtr, filename_size: DWORD, filename: *const libc::wchar_t, server_id: *mut DWORD, status: *mut SRequestStatus) -> HRESULT {
+        // TODO
+        todo!()
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_CloseServer(device_ptr: DevicePtr, server_id: DWORD, status: *mut SRequestStatus) -> HRESULT {
+        // TODO
+        todo!()
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_SendServerMsg(device_ptr: DevicePtr, server_id: DWORD, request: DWORD, page_number: DWORD, data_size: DWORD, data: *const u8, output_size: DWORD, output: *mut u8, status: *mut SRequestStatus) -> HRESULT {
+        // TODO
+        todo!()
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_SendServerFile(device_ptr: DevicePtr, server_id: DWORD, request: DWORD, page_number: DWORD, header_size: DWORD, header: *const u8, filename_size: DWORD, filename: *const libc::wchar_t, output_size: DWORD, output: *mut u8, status: *mut SRequestStatus) -> HRESULT {
+        // TODO
+        todo!()
+    }
+}
+
+directoutputlib_export! {
+    fn DirectOutput_SaveFile(device_ptr: DevicePtr, page_number: DWORD, file_index: DWORD, filename_size: usize, filename: *const libc::wchar_t, status: *mut SRequestStatus) -> HRESULT {
+        let Some(ref state) = *STATE.lock().expect("State is poisoned") else {
+            log::error!("Library function has been called, but the library is not initialized");
+            return E_HANDLE;
+        };
+
+        let display = match get_display(state, device_ptr) {
+            Ok(display) => display,
+            Err(err) => return err,
+        };
+
+        let Ok(filename_wide) = widestring::WideCStr::from_ptr(<*const libc::wchar_t>::cast(filename), filename_size) else {
+            return E_INVALIDARG;
+        };
+
+        let Ok(file) = fs::File::open(filename_wide.to_string().expect("Invalid filename")) else {
+            return E_INVALIDARG;
+        };
+        let Ok(page_number) = page_number.try_into() else { return E_INVALIDARG };
+        let Ok(file_index) = file_index.try_into() else { return E_INVALIDARG };
+        _ = display.save_file(page_number, file_index, &mut BufReader::new(file));
+        // TODO: error handling
+        // TODO: fill in `status`
+
         S_OK
     }
 }
 
 directoutputlib_export! {
-    fn DirectOutput_StartServer(device_ptr: DevicePtr, filename_size: DWORD, filename: *const libc::wchar_t, server_id: *mut DWORD, status: *mut PSRequestStatus) -> HRESULT {
-        // TODO
-        E_NOTIMPL
-    }
-}
+    fn DirectOutput_DisplayFile(device_ptr: DevicePtr, page_number: DWORD, image_index: DWORD, file_index: DWORD, status: *mut SRequestStatus) -> HRESULT {
+        let Some(ref state) = *STATE.lock().expect("State is poisoned") else {
+            log::error!("Library function has been called, but the library is not initialized");
+            return E_HANDLE;
+        };
 
-directoutputlib_export! {
-    fn DirectOutput_CloseServer(device_ptr: DevicePtr, server_id: DWORD, status: *mut PSRequestStatus) -> HRESULT {
-        // TODO
-        E_NOTIMPL
-    }
-}
+        let display = match get_display(state, device_ptr) {
+            Ok(display) => display,
+            Err(err) => return err,
+        };
 
-directoutputlib_export! {
-    fn DirectOutput_SendServerMsg(device_ptr: DevicePtr, server_id: DWORD, request: DWORD, page_number: DWORD, data_size: DWORD, data: *const u8, output_size: DWORD, output: *mut u8, status: *mut PSRequestStatus) -> HRESULT {
-        // TODO
-        E_NOTIMPL
-    }
-}
+        let Ok(page_number) = page_number.try_into() else { return E_INVALIDARG };
+        let Ok(image_index) = image_index.try_into() else { return E_INVALIDARG };
+        let Ok(file_index) = file_index.try_into() else { return E_INVALIDARG };
+        _ = display.display_file(page_number, image_index, file_index);
+        // TODO: error handling
+        // TODO: fill in `status`
 
-directoutputlib_export! {
-    fn DirectOutput_SendServerFile(device_ptr: DevicePtr, server_id: DWORD, request: DWORD, page_number: DWORD, header_size: DWORD, header: *const u8, filename_size: DWORD, filename: *const libc::wchar_t, output_size: DWORD, output: *mut u8, status: *mut PSRequestStatus) -> HRESULT {
-        // TODO
-        E_NOTIMPL
-    }
-}
-
-directoutputlib_export! {
-    fn DirectOutput_SaveFile(device_ptr: DevicePtr, page_number: DWORD, file_index: DWORD, filename_size: DWORD, filename: *const libc::wchar_t, status: *mut PSRequestStatus) -> HRESULT {
-        // TODO
         S_OK
     }
 }
 
 directoutputlib_export! {
-    fn DirectOutput_DisplayFile(device_ptr: DevicePtr, page_number: DWORD, image_index: DWORD, file_index: DWORD, status: *mut PSRequestStatus) -> HRESULT {
-        // TODO
-        S_OK
-    }
-}
+    fn DirectOutput_DeleteFile(device_ptr: DevicePtr, page_number: DWORD, file_index: DWORD, status: *mut SRequestStatus) -> HRESULT {
+        let Some(ref state) = *STATE.lock().expect("State is poisoned") else {
+            log::error!("Library function has been called, but the library is not initialized");
+            return E_HANDLE;
+        };
 
-directoutputlib_export! {
-    fn DirectOutput_DeleteFile(device_ptr: DevicePtr, page_number: DWORD, file_index: DWORD, status: *mut PSRequestStatus) -> HRESULT {
-        // TODO
+        let display = match get_display(state, device_ptr) {
+            Ok(display) => display,
+            Err(err) => return err,
+        };
+
+        let Ok(page_number) = page_number.try_into() else { return E_INVALIDARG };
+        let Ok(file_index) = file_index.try_into() else { return E_INVALIDARG };
+        _ = display.delete_file(page_number, file_index);
+        // TODO: error handling
+        // TODO: fill in `status`
+
         S_OK
     }
 }

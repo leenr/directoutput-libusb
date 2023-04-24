@@ -2,7 +2,7 @@ use std::{
     cell::OnceCell,
     mem,
     sync::{Arc, Mutex, Weak},
-    time::Duration,
+    time::Duration, io::Read,
 };
 
 use num_enum::{IntoPrimitive, TryFromPrimitive, TryFromPrimitiveError};
@@ -439,6 +439,48 @@ impl<T: rusb::UsbContext> ManagedDisplay for UsbSaitekFipLcd<T> {
     fn clear_image(&self, page: u8) -> Result<(), ()> {
         let mut packet = ControlPacket::new(Request::ClearImage);
         packet.set_page(page);
+        let (packet, _) = self.transmit(packet, None).map_err(|_| ())?; // TODO: error
+        match packet.has_error() {
+            false => Ok(()),
+            true => Err(()), // TODO
+        }
+    }
+
+    fn save_file(&self, page: u8, file: u8, data: &mut dyn Read) -> Result<(), ()> {
+        let mut packet = ControlPacket::new(Request::SaveFile);
+        packet.set_param_1(page.into());
+        packet.set_param_3(file.into());
+
+        let mut buffer = Vec::new();
+        if let Err(err) = data.read_to_end(&mut buffer) {
+            log::error!("Cannot read data: {:?}", err);
+            return Err(());
+        }
+        packet.set_data_size(buffer.len());
+
+        let (packet, _) = self.transmit(packet, Some(buffer.as_slice())).map_err(|_| ())?; // TODO: error
+        match packet.has_error() {
+            false => Ok(()),
+            true => Err(()), // TODO
+        }
+    }
+
+    fn display_file(&self, page: u8, index: u8, file: u8) -> Result<(), ()> {
+        let mut packet = ControlPacket::new(Request::SaveFile);
+        packet.set_param_1(page.into());
+        packet.set_param_2(index.into());
+        packet.set_param_3(file.into());
+        let (packet, _) = self.transmit(packet, None).map_err(|_| ())?; // TODO: error
+        match packet.has_error() {
+            false => Ok(()),
+            true => Err(()), // TODO
+        }
+    }
+
+    fn delete_file(&self, page: u8, file: u8) -> Result<(), ()> {
+        let mut packet = ControlPacket::new(Request::SaveFile);
+        packet.set_param_1(page.into());
+        packet.set_param_3(file.into());
         let (packet, _) = self.transmit(packet, None).map_err(|_| ())?; // TODO: error
         match packet.has_error() {
             false => Ok(()),
