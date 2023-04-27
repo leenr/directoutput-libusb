@@ -92,8 +92,10 @@ directoutputlib_export! {
         //sleep(Duration::from_secs(1));
 
         if !app_name.is_null() && log::log_enabled!(log::Level::Info) {
-            let app_name = unsafe { widestring::WideCStr::from_ptr_str(app_name.cast()) };
-            log::info!("App initialized ({:?})", app_name);
+            match unsafe { widestring::WideCStr::from_ptr_str(app_name.cast()) }.to_string() {
+                Ok(app_name_str) => log::info!("App initialized ({:?})", app_name_str),
+                Err(_) => log::info!("App initialized"),
+            };
         }
 
         S_OK

@@ -25,8 +25,8 @@ HRESULT __stdcall DirectOutput_SetImage(void* hDevice, DWORD dwPage, DWORD dwInd
 HRESULT __stdcall DirectOutput_GetSerialNumber(void* hDevice, wchar_t* pszSerialNumber, DWORD dwSize);
 '''.replace('HRESULT', 'int64_t').replace('DWORD', 'int32_t')
 )
-#m = f.dlopen('./target/debug/liblibfip.so')
-m = f.dlopen('./libfip/libfip.dll.so')
+m = f.dlopen('./target/debug/liblibfip.so')
+#m = f.dlopen('./libfip/libfip.dll.so')
 
 
 device_addr = None
