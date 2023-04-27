@@ -4,7 +4,8 @@ mod usb_ids;
 use rusb::UsbContext;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, RwLock}, io::Read,
+    io::Read,
+    sync::{Arc, RwLock, Weak},
 };
 use uuid::Uuid;
 
@@ -28,15 +29,24 @@ pub struct State {
     #[allow(dead_code)] // prevent dropping
     libusb_hotplug_reg: rusb::Registration<rusb::Context>,
     displays: Arc<RwLock<BTreeMap<UsbDeviceAddress, Arc<dyn ManagedDisplay>>>>,
+    display_hotplug_handlers: Arc<RwLock<Vec<Box<dyn Hotplug>>>>,
+}
+
+pub trait Hotplug: Send + Sync {
+    fn display_arrived(&mut self, device_addr: UsbDeviceAddress);
+    fn display_left(&mut self, device_addr: UsbDeviceAddress);
 }
 
 struct UsbHotplugHandler {
-    displays: Arc<RwLock<BTreeMap<UsbDeviceAddress, Arc<dyn ManagedDisplay>>>>,
+    displays: Weak<RwLock<BTreeMap<UsbDeviceAddress, Arc<dyn ManagedDisplay>>>>,
+    display_hotplug_handlers: Weak<RwLock<Vec<Box<dyn Hotplug>>>>,
 }
 
 pub fn init() -> Result<State, ()> {
     let displays: Arc<RwLock<BTreeMap<UsbDeviceAddress, Arc<dyn ManagedDisplay>>>> =
         Arc::new(RwLock::new(BTreeMap::new()));
+    let display_hotplug_handlers: Arc<RwLock<Vec<Box<dyn Hotplug>>>> =
+        Arc::new(RwLock::new(Vec::with_capacity(1)));
 
     let libusb_context: rusb::Context = rusb::Context::new().expect("Cannot create libusb context");
     let libusb_hotplug_reg = rusb::HotplugBuilder::new()
@@ -45,7 +55,8 @@ pub fn init() -> Result<State, ()> {
         .register(
             &libusb_context,
             Box::new(UsbHotplugHandler {
-                displays: displays.clone(),
+                displays: Arc::downgrade(&displays),
+                display_hotplug_handlers: Arc::downgrade(&display_hotplug_handlers),
             }),
         )
         .expect("Cannot register libusb hotplug handler");
@@ -64,6 +75,7 @@ pub fn init() -> Result<State, ()> {
         libusb_context,
         libusb_hotplug_reg,
         displays,
+        display_hotplug_handlers,
     })
 }
 
@@ -80,45 +92,66 @@ impl<T: UsbContext + 'static> rusb::Hotplug<T> for UsbHotplugHandler {
             return;
         };
 
-        if desc.vendor_id() == usb_ids::VID_SAITEK && desc.product_id() == usb_ids::PID_SAITEK_FIP {
-            log::info!(
-                "Saitek FIP device detected via USB ({bus_number}-{address})",
-                bus_number = device.bus_number(),
-                address = device.address()
-            );
+        let display = match (desc.vendor_id(), desc.product_id()) {
+            (usb_ids::VID_SAITEK, usb_ids::PID_SAITEK_FIP) => {
+                log::info!(
+                    "Saitek FIP device detected via USB ({bus_number}-{address})",
+                    bus_number = device.bus_number(),
+                    address = device.address()
+                );
+                crate::devices::saitek_fip_lcd::new_from_libusb(device)
+            }
+            _ => return,
+        };
 
-            let display = crate::devices::saitek_fip_lcd::new_from_libusb(device);
-
-            let mut displays = self.displays.write().expect("State is poisoned");
+        {
+            let Some(ref rc) = self.displays.upgrade() else { return; };
+            let mut displays = rc.write().expect("State is poisoned");
             displays.insert(addr, display);
+        }
+        {
+            let Some(ref rc) = self.display_hotplug_handlers.upgrade() else { return; };
+            let mut handlers = rc.write().expect("State is poisoned");
+            handlers
+                .iter_mut()
+                .for_each(|handler| handler.display_arrived(addr))
         }
     }
 
     fn device_left(&mut self, device: rusb::Device<T>) {
         let addr = (device.bus_number(), device.address());
-        let mut displays = self.displays.write().expect("State is poisoned");
-        if displays.remove(&addr).is_some() {
+        {
+            let Some(ref rc) = self.displays.upgrade() else { return; };
+            let mut displays = rc.write().expect("State is poisoned");
+            if displays.remove(&addr).is_none() {
+                return;
+            }
             log::info!(
                 "USB device disconnected ({bus_number}-{address})",
                 bus_number = device.bus_number(),
                 address = device.address()
             );
         }
+        {
+            let Some(ref rc) = self.display_hotplug_handlers.upgrade() else { return; };
+            let mut handlers = rc.write().expect("State is poisoned");
+            handlers
+                .iter_mut()
+                .for_each(|handler| handler.display_left(addr))
+        }
     }
 }
 
 impl State {
+    pub fn add_hotplug_handler(&mut self, hotplug: Box<dyn Hotplug>) {
+        self.display_hotplug_handlers.write().unwrap().push(hotplug);
+    }
+
     pub fn display_addrs(&self) -> Vec<UsbDeviceAddress> {
         let displays = self.displays.read().unwrap();
         displays
             .iter()
-            .filter_map(|kv| {
-                if kv.1.ready() {
-                    Some(*kv.0)
-                } else {
-                    None
-                }
-            })
+            .filter_map(|kv| if kv.1.ready() { Some(*kv.0) } else { None })
             .collect()
     }
 

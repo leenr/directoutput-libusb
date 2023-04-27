@@ -2,13 +2,17 @@
 #![feature(let_chains)]
 
 use core::slice;
-use std::{sync::{Arc, Mutex}, io::BufReader, fs, thread::sleep, time::Duration};
+use std::{
+    fs,
+    io::BufReader,
+    sync::{Arc, Mutex},
+};
 
 extern crate pretty_env_logger;
 
 mod devices;
 
-type PrgCtx = *mut libc::c_void;
+type PrgCtx = usize;
 type DevicePtr = u64;
 
 #[allow(clippy::upper_case_acronyms)]
@@ -23,8 +27,12 @@ type Pfn_DirectOutput_EnumerateCallback =
 type Pfn_DirectOutput_DeviceChange =
     unsafe extern "stdcall" fn(device_ptr: DevicePtr, is_added: bool, prg_ctx: PrgCtx);
 #[allow(non_camel_case_types)]
-type Pfn_DirectOutput_PageChange =
-    unsafe extern "stdcall" fn(device_ptr: DevicePtr, page: DWORD, is_activated: bool, prg_ctx: PrgCtx);
+type Pfn_DirectOutput_PageChange = unsafe extern "stdcall" fn(
+    device_ptr: DevicePtr,
+    page: DWORD,
+    is_activated: bool,
+    prg_ctx: PrgCtx,
+);
 #[allow(non_camel_case_types)]
 type Pfn_DirectOutput_SoftButtonChange =
     unsafe extern "stdcall" fn(device_ptr: DevicePtr, buttons_state: DWORD, prg_ctx: PrgCtx);
@@ -74,32 +82,94 @@ macro_rules! directoutputlib_export {
 static STATE: Mutex<Option<devices::State>> = Mutex::new(None);
 
 directoutputlib_export! {
-    fn DirectOutput_Initialize(app_name: libc::uint64_t) -> HRESULT {
+    fn DirectOutput_Initialize(app_name: *const libc::wchar_t) -> HRESULT {
         pretty_env_logger::init();
+        log::trace!("DirectOutput_Initialize");
         let mut state = STATE.lock().expect("State is poisoned");
         if state.is_none() {
             state.replace(devices::init().expect("Cannot perform library initialization"));
         }
-        sleep(Duration::from_secs(1));
-        log::info!("App initialized ({:p} {:#})", &0, app_name);
+        //sleep(Duration::from_secs(1));
+
+        if !app_name.is_null() && log::log_enabled!(log::Level::Info) {
+            let app_name = unsafe { widestring::WideCStr::from_ptr_str(app_name.cast()) };
+            log::info!("App initialized ({:?})", app_name);
+        }
+
         S_OK
     }
 }
 
 directoutputlib_export! {
     fn DirectOutput_Deinitialize() -> HRESULT {
+        log::trace!("DirectOutput_Deinitialize");
+
         let mut state = STATE.lock().expect("State is poisoned");
         if state.is_some() {
-            _ = state.take();
+            drop(state.take());
+            log::trace!("App deinitialized, state dropped");
         }
+
         S_OK
+    }
+}
+
+struct HotplugHandler {
+    callback: Pfn_DirectOutput_DeviceChange,
+    prg_ctx: PrgCtx,
+}
+
+impl devices::Hotplug for HotplugHandler {
+    fn display_arrived(&mut self, addr: devices::UsbDeviceAddress) {
+        let device_ptr = embed_addr(addr);
+        log::trace!(
+            "Calling device change callback: {:p}({:#}, {:?})",
+            self.callback,
+            true,
+            self.prg_ctx
+        );
+        let callback = self.callback;
+        unsafe {
+            callback(device_ptr, true, self.prg_ctx);
+        }
+        log::trace!(
+            "Called device change callback: {:p}({:#}, {:?})",
+            self.callback,
+            true,
+            self.prg_ctx
+        );
+    }
+
+    fn display_left(&mut self, addr: devices::UsbDeviceAddress) {
+        let device_ptr = embed_addr(addr);
+        log::trace!(
+            "Calling device change callback: {:p}({:#}, {:?})",
+            self.callback,
+            false,
+            self.prg_ctx
+        );
+        let callback = self.callback;
+        unsafe {
+            callback(device_ptr, false, self.prg_ctx);
+        }
+        log::trace!(
+            "Called device change callback: {:p}({:#}, {:?})",
+            self.callback,
+            false,
+            self.prg_ctx
+        );
     }
 }
 
 directoutputlib_export! {
     fn DirectOutput_RegisterDeviceCallback(callback: Pfn_DirectOutput_DeviceChange, prg_ctx: PrgCtx) -> HRESULT {
         // TODO
-        log::info!("RegisterDeviceCallback {:p}(..., {:p})", callback, prg_ctx);
+        log::trace!("DirectOutput_RegisterDeviceCallback {:p}(..., {:?})", callback, prg_ctx);
+        let Some(ref mut state) = *STATE.lock().expect("State is poisoned") else {
+            log::error!("Library function has been called, but the library is not initialized");
+            return E_HANDLE;
+        };
+        state.add_hotplug_handler(Box::new(HotplugHandler{callback,prg_ctx}));
         S_OK
     }
 }
@@ -113,9 +183,9 @@ directoutputlib_export! {
 
         state.display_addrs().iter().for_each(move |addr| {
             let device_ptr = embed_addr(*addr);
-            log::info!("Calling {:p}({:#}, {:p})", callback, device_ptr, prg_ctx);
+            log::trace!("Calling enumerate callback: {:p}({:#}, {:?})", callback, device_ptr, prg_ctx);
             unsafe { callback(device_ptr, prg_ctx); }
-            log::info!("Called {:p}({:#}, {:p})", callback, device_ptr, prg_ctx);
+            log::trace!("Called enumerate callback {:p}({:#}, {:?})", callback, device_ptr, prg_ctx);
         });
 
         S_OK
@@ -162,14 +232,14 @@ directoutputlib_export! {
 
 directoutputlib_export! {
     fn DirectOutput_GetDeviceInstance(device_ptr: DevicePtr, guid: *mut GUID) -> HRESULT {
-        // TODO
+        // TODO?? (DirectInput)
         E_NOTIMPL
     }
 }
 
 directoutputlib_export! {
     fn DirectOutput_SetProfile(device_ptr: DevicePtr, debug_profile_name_size: usize, debug_profile_name: *mut libc::wchar_t) -> HRESULT {
-        // TODO (talks to the driver)
+        // TODO?? (talks to the driver)
         E_NOTIMPL
     }
 }
@@ -297,7 +367,7 @@ directoutputlib_export! {
             Err(err) => return err,
         };
 
-        let Ok(filename_wide) = widestring::WideCStr::from_ptr(<*const libc::wchar_t>::cast(filename), filename_size) else {
+        let Ok(filename_wide) = widestring::WideCStr::from_ptr(filename.cast(), filename_size) else {
             return E_INVALIDARG;
         };
 

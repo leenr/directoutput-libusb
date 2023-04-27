@@ -1,8 +1,9 @@
 use std::{
     cell::OnceCell,
+    io::Read,
     mem,
     sync::{Arc, Mutex, Weak},
-    time::Duration, io::Read,
+    time::Duration,
 };
 
 use num_enum::{IntoPrimitive, TryFromPrimitive, TryFromPrimitiveError};
@@ -458,7 +459,9 @@ impl<T: rusb::UsbContext> ManagedDisplay for UsbSaitekFipLcd<T> {
         }
         packet.set_data_size(buffer.len());
 
-        let (packet, _) = self.transmit(packet, Some(buffer.as_slice())).map_err(|_| ())?; // TODO: error
+        let (packet, _) = self
+            .transmit(packet, Some(buffer.as_slice()))
+            .map_err(|_| ())?; // TODO: error
         match packet.has_error() {
             false => Ok(()),
             true => Err(()), // TODO
