@@ -3,7 +3,7 @@ use std::{
     io::Read,
     mem,
     sync::{Arc, Mutex, RwLock, Weak},
-    time::Duration,
+    time::Duration, thread::sleep,
 };
 
 use bitmask_enum::bitmask;
@@ -67,17 +67,11 @@ struct UsbSaitekFipLcd<T: rusb::UsbContext> {
 }
 
 impl<T: rusb::UsbContext> UsbSaitekFipLcdInt<T> {
-    fn new(dev: &UsbSaitekFipLcd<T>) -> UsbSaitekFipLcdInt<T> {
-        let mut libusb_handle = dev.libusb_device.open().expect("Cannot open device handle");
-        let device_descriptor = dev
-            .libusb_device
-            .device_descriptor()
-            .expect("Cannot read device descriptor");
+    fn new(dev: &UsbSaitekFipLcd<T>) -> Result<UsbSaitekFipLcdInt<T>, rusb::Error> {
+        let mut libusb_handle = dev.libusb_device.open()?;
+        let device_descriptor = dev.libusb_device.device_descriptor()?;
+        let config_descriptor = dev.libusb_device.active_config_descriptor()?;
 
-        let config_descriptor = dev
-            .libusb_device
-            .active_config_descriptor()
-            .expect("Cannot read device config descriptor");
         let mut interfaces = config_descriptor.interfaces();
 
         let hid_interface = interfaces
@@ -94,26 +88,19 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcdInt<T> {
             .expect("Cannot find vendor's interface of the device");
 
         _ = libusb_handle.detach_kernel_driver(hid_interface.number());
-        libusb_handle
-            .claim_interface(hid_interface.number())
-            .expect("Cannot claim HID interface of the device");
+        libusb_handle.claim_interface(hid_interface.number())?;
 
         _ = libusb_handle.detach_kernel_driver(vendor_interface.number());
-        libusb_handle
-            .claim_interface(vendor_interface.number())
-            .expect("Cannot claim vendor's interface of the device");
+        libusb_handle.claim_interface(vendor_interface.number())?;
 
         let serial_number = {
-            let langs = libusb_handle
-                .read_languages(std::time::Duration::from_secs(5))
-                .expect("Could not read languages from the device");
+            let langs = libusb_handle.read_languages(std::time::Duration::from_secs(5))?;
             libusb_handle
                 .read_serial_number_string(
                     langs[0],
                     &device_descriptor,
                     std::time::Duration::from_secs(1),
-                )
-                .expect("Could not read serial number from the device")
+                )?
         };
 
         // seems like that is just a harcoded uuid
@@ -155,7 +142,7 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcdInt<T> {
             device_type_uuid
         );
 
-        UsbSaitekFipLcdInt {
+        Ok(UsbSaitekFipLcdInt {
             handle: DeviceHandlerWrapper {
                 libusb_handle,
                 hid_endpoint_address: *hid_endpoint_address
@@ -171,7 +158,7 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcdInt<T> {
             serial_number,
             device_type_uuid,
             vendor_if_mutex: Mutex::default(),
-        }
+        })
     }
 }
 
@@ -415,7 +402,14 @@ impl<T: rusb::UsbContext> UsbSaitekFipLcd<T> {
 
     fn _thread_target(device_weak: Weak<UsbSaitekFipLcd<T>>) {
         let Some(device) = device_weak.upgrade() else { return };
-        let device_int = UsbSaitekFipLcdInt::new(&device);
+        let device_int = match UsbSaitekFipLcdInt::new(&device) {
+            Ok(device_int) => device_int,
+            Err(rusb::Error::Access) => {
+                sleep(Duration::from_secs(1));
+                UsbSaitekFipLcdInt::new(&device).expect("Cannot open device")
+            }
+            Err(_) => panic!("Cannot open device")
+        };
 
         let (response, _) = device_int
             .transcieve(ControlPacket::new(Request::SomeFactoryModeRequest), None)
